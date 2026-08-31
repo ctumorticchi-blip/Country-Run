@@ -20,13 +20,35 @@ const PLACEHOLDER_STARTING_MONTH = 1
 
 const PLACEHOLDER_ECONOMIC_STATE = {
   gdp: 2800, // Md€, placeholder order of magnitude only
+  nominalGdp: 2800, // Md€, placeholder — equal to real GDP at t=0 (index base)
+  potentialGrowth: 1.2, // %/year, placeholder
   growth: 1.1, // %/year, placeholder
   inflation: 2.0, // %/year, placeholder
+
   unemployment: 7.5, // %, placeholder
-  deficitRatio: 5.0, // % of GDP, placeholder
+  structuralUnemployment: 7.0, // %, placeholder
+
+  publicRevenue: 1350, // Md€/year run-rate, placeholder
+  publicSpending: 1500, // Md€/year run-rate, placeholder (includes interestCost below)
+  fiscalBalance: -150, // Md€/year, placeholder (publicRevenue - publicSpending)
+  deficit: 150, // Md€/year, placeholder (max(0, -fiscalBalance))
+  deficitRatio: 5.4, // % of nominal GDP, placeholder
+
   debt: 3200, // Md€, placeholder
-  debtRatio: 112, // % of GDP, placeholder
-  purchasingPower: 0, // index, 0 = baseline, placeholder
+  debtRatio: 114.3, // % of nominal GDP, placeholder
+
+  effectiveDebtRate: 2.2, // %/year blended rate on the debt stock, placeholder
+  interestCost: 70, // Md€/year, placeholder (effectiveDebtRate% × debt)
+
+  purchasingPower: 0, // cumulative index, 0 = baseline at game start, placeholder
+
+  productivityGrowth: 0.8, // %/year, placeholder
+
+  consumerConfidence: 50, // index 0-100, placeholder (neutral)
+  businessConfidence: 50, // index 0-100, placeholder (neutral)
+  marketConfidence: 55, // index 0-100, placeholder
+
+  publicSectorEfficiency: 55, // index 0-100, placeholder
 } satisfies GameState['economic']
 
 const PLACEHOLDER_POLITICAL_STATE = {

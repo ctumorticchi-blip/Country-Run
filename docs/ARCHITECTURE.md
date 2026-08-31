@@ -1,24 +1,30 @@
-# Architecture — Country Run (M0 Foundation)
+# Architecture — Country Run (M0 Foundation + M1 Economic Engine)
 
-This document describes the technical foundation built at Milestone M0. It
-is a companion to `Country_Run_Product_Bible_V1.docx`, the product source of
-truth — this document only covers *how the code is organized*, not what the
-game is.
+This document describes the technical foundation built at Milestone M0 and
+extended at M1. It is a companion to `Country_Run_Product_Bible_V1.docx`,
+the product source of truth — this document only covers *how the code is
+organized*, not what the game is. The Economic Engine itself (formulas,
+units, annualization, configuration, calibration status) is documented
+separately in `docs/ECONOMIC_ENGINE.md` — this file only describes where it
+sits in the overall architecture.
 
-## Scope of M0
+## Scope of M0 and M1
 
-M0 builds a clean, testable technical foundation: a generic simulation
+M0 built a clean, testable technical foundation: a generic simulation
 engine, a minimal (fictional, placeholder) game state for Country Run, and a
-debug shell to exercise it. It deliberately does **not** build:
+debug shell to exercise it. M1 built the macroeconomic simulation
+(`engine/economy/`) on top of that foundation — see
+`docs/ECONOMIC_ENGINE.md` for details. Together they deliberately do
+**not** build:
 
-- the Economic Engine's actual calculations (Product Bible §6),
-- the Budget Builder,
+- the Budget Builder UI,
 - Year 1 content (decisions, events, promises, scenarios),
 - scoring, campaign, government/parliament mechanics,
-- any real design/UI polish.
+- any real design/UI polish,
+- the real, sourced France 2027 dataset.
 
-These are explicitly out of scope until M0 is validated. See "What is
-explicitly out of M0" below for the full list.
+These are explicitly out of scope until the vertical slice's foundation is
+validated. See "What is explicitly out of M0/M1" below for the full list.
 
 ## High-level structure
 
@@ -28,14 +34,14 @@ src/
     conditions/    — composable predicates over a GameState
     effects/       — state mutations + delayed effects queue
     events/        — generic GameEvent shape + eligibility/roll helpers
-    economy/        — reserved for the Economic Engine (M1+); empty in M0
-    scoring/         — reserved for final scoring (M1+); empty in M0
+    economy/       — the Economic Engine (M1); see docs/ECONOMIC_ENGINE.md
+    scoring/       — reserved for final scoring (M-later); empty
     seeded-rng/    — deterministic PRNG
-    state/         — GameState shape, turn engine, decision/promise/advisor types
+    state/         — GameState shape, turn engine, calendar, decision/promise/advisor types
 
   game/
     country-run/   — Country Run's own content and data, built on engine/ types
-      data/        — createInitialGameState() + placeholder starting values
+      data/        — createInitialGameState()/createInitialWorldState() + placeholder starting values
       decisions/   — reserved, empty in M0
       events/      — reserved, empty in M0
       promises/    — reserved, empty in M0
@@ -62,13 +68,20 @@ snapshot of a run:
 ```ts
 GameState = {
   meta: { seed, turn, year, month, phase }
-  economic: { gdp, growth, inflation, unemployment, deficitRatio, debt, debtRatio, purchasingPower }
+  economic: EconomicState  // see docs/ECONOMIC_ENGINE.md for the full field list, units, and formulas (M1)
   political: { popularity, parliamentSeats, politicalCredibility }
   social: { socialTension }
   policy: { activePolicies: string[] }
   delayedEffects: DelayedEffect[]
 }
 ```
+
+`EconomicState` was extended at M1 from M0's handful of headline numbers to
+the full set the Economic Engine computes (GDP levels, potential/actual
+growth, unemployment split into cyclical/structural, the fiscal aggregates,
+debt and its interest rate, purchasing power, productivity, and the three
+confidence indices) — see `engine/state/gameState.ts` and
+`docs/ECONOMIC_ENGINE.md` ("Units").
 
 Notes on deliberate adaptations from the spec:
 
@@ -213,10 +226,14 @@ the entire M0 turn loop:
    Bible §2), rolling `month` over into `year` as needed,
 3. resolve any due delayed effects.
 
-`advanceTurn` is pure — it never mutates its argument. **No economic
-simulation runs here yet.** GDP, unemployment, inflation, etc. are static
-until the Economic Engine (M1+, `engine/economy/`) is built on top of this
-turn loop.
+`advanceTurn` is pure — it never mutates its argument, and it is
+**unchanged since M0**. M1 layers the Economic Engine on top of it rather
+than modifying it: `engine/economy/advanceEconomy.ts#advanceEconomicTurn`
+calls `advanceTurn` first (calendar + due delayed effects), then runs the
+turn's economic computation, then merges the result — including any newly
+scheduled structural delayed effects — into a full `GameState`. See
+`docs/ECONOMIC_ENGINE.md` ("Order of execution for one turn") for the
+complete pipeline.
 
 ## Debug shell (`app/`)
 
@@ -241,25 +258,24 @@ presentational component factored out for reuse; it contains no game logic.
 - **No business logic in React components.** Components read from and
   dispatch to the engine; they do not implement game rules. `App.tsx` and
   `StatCard.tsx` contain zero decisions about game mechanics.
-- **No scattered magic numbers.** The one gameplay constant in M0 (2
-  months per turn) lives in a single named constant in `turnEngine.ts`, not
-  inlined at each call site. Economic coefficients don't exist yet — when
-  the Economic Engine is built, the Product Bible's constraint that "every
-  significant economic coefficient must be configurable, not buried in the
-  UI" (§16) applies there.
+- **No scattered magic numbers.** The calendar constant (2 months per
+  turn, 6 turns/year) lives in `engine/state/calendar.ts`, the single
+  place both the turn engine and the Economic Engine's annualization
+  helpers read it from. Every Economic Engine coefficient lives in
+  `engine/economy/config/` (Product Bible §16) — no formula file has a
+  bare numeric literal.
 - **`.ts` extensions in imports.** Vite + modern TS resolution wants
   explicit extensions on relative imports; this repo uses them consistently
   rather than mixing conventions.
 
-## What is explicitly out of M0
+## What is explicitly out of M0/M1
 
-Per the Product Bible and the M0 brief, none of the following exist yet,
-on purpose:
+Per the Product Bible and the M0/M1 briefs, none of the following exist
+yet, on purpose:
 
-- Economic Engine calculations (GDP/revenue/deficit/debt/unemployment/
-  inflation/confidence formulas) — `engine/economy/` is an empty,
-  documented placeholder.
-- Budget Builder.
+- Budget Builder UI (the Economic Engine that would power it exists as of
+  M1 — see docs/ECONOMIC_ENGINE.md — but there is no player-facing budget
+  screen).
 - Any Year 1 content: decisions, events (e.g. the energy shock), promises,
   scenario sequencing — `game/country-run/{decisions,events,promises,
   scenarios}/` are empty, documented placeholders.

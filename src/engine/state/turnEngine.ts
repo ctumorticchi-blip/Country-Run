@@ -1,11 +1,6 @@
 import { resolveDueDelayedEffects } from '../effects/delayedEffect.ts'
+import { MONTHS_PER_TURN } from './calendar.ts'
 import type { GameState } from './gameState.ts'
-
-/**
- * One turn = 2 in-fiction months, 6 turns per year (Product Bible §2,
- * "Temps moteur").
- */
-const MONTHS_PER_TURN = 2
 
 /** Advances (year, month) forward by one turn's worth of in-fiction time. */
 function advanceCalendar(year: number, month: number): { year: number; month: number } {

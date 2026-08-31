@@ -2,7 +2,7 @@
   "name": "country-run",
   "private": true,
   "version": "0.0.0",
-  "description": "Country Run — vertical slice. M0 Foundation: generic simulation engine + debug shell.",
+  "description": "Country Run — vertical slice. M0 Foundation + M1 Economic Engine.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:scenarios": "vitest run src/engine/economy/advanceEconomy.scenarios.test.ts --reporter=verbose",
     "lint": "eslint ."
   },
   "dependencies": {
