@@ -18,7 +18,21 @@ export function computePotentialGrowth(productivityGrowth: number, config: Econo
 export interface ComputeGrowthInput {
   potentialGrowth: number
   gdp: number
+  /** Used for the tax-impulse terms only — a sustained tax stance is treated as a persistent demand effect. */
   policyInput: EconomicPolicyInput
+  /**
+   * The CHANGE in policy stance since last turn (`computePolicyDelta`), used
+   * for the spending-side terms (`currentSpendingChanges`,
+   * `publicInvestmentChanges`, `transfersChanges`) only. Product Bible §6
+   * ("Temporalité des effets") frames a spending/investment demand impulse
+   * as a 12-24 month adjustment, not a permanent per-turn boost for as long
+   * as the policy stays active — using the raw sustained level here instead
+   * would let a spending increase keep re-boosting growth every turn
+   * forever, letting it effectively "pay for itself" in the debt ratio
+   * regardless of how large it is (see docs/ECONOMIC_ENGINE.md, "Policy
+   * input units").
+   */
+  policyDelta: EconomicPolicyInput
   world: WorldState
   /** Previous turn's confidence readings — this turn's confidence is computed after growth, so using it would be circular. */
   consumerConfidencePrev: number
@@ -39,16 +53,17 @@ export interface ComputeGrowthInput {
  * `annualPercentToPerTurnFraction` (see advanceEconomy.ts).
  */
 export function computeGrowth(input: ComputeGrowthInput): { growth: number; contributions: EconomicDiagnostics['growthContributions'] } {
-  const { potentialGrowth, gdp, policyInput, world, consumerConfidencePrev, businessConfidencePrev, productivityGrowth, config } = input
+  const { potentialGrowth, gdp, policyInput, policyDelta, world, consumerConfidencePrev, businessConfidencePrev, productivityGrowth, config } =
+    input
 
   // Public investment's demand effect scales with how efficiently the public sector executes it
   // (Product Bible §6, "Services publics = dépenses/investissements × efficacité × qualité d'exécution").
-  const effectivePublicInvestment = policyInput.publicInvestmentChanges * (input.publicSectorEfficiencyPrev / 100)
+  const effectivePublicInvestmentDelta = policyDelta.publicInvestmentChanges * (input.publicSectorEfficiencyPrev / 100)
 
   const fiscalImpulse =
-    (policyInput.currentSpendingChanges * config.fiscalMultiplier.currentSpending +
-      effectivePublicInvestment * config.fiscalMultiplier.publicInvestment +
-      policyInput.transfersChanges * config.fiscalMultiplier.transfers -
+    (policyDelta.currentSpendingChanges * config.fiscalMultiplier.currentSpending +
+      effectivePublicInvestmentDelta * config.fiscalMultiplier.publicInvestment +
+      policyDelta.transfersChanges * config.fiscalMultiplier.transfers -
       policyInput.businessTaxImpulse * config.fiscalMultiplier.businessTax -
       policyInput.householdTaxImpulse * config.fiscalMultiplier.householdTax) /
     gdp *

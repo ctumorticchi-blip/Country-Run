@@ -18,6 +18,7 @@ function baseInput(overrides?: Partial<ComputeGrowthInput>): ComputeGrowthInput 
     potentialGrowth: 1.2,
     gdp: 2800,
     policyInput: NEUTRAL_POLICY_INPUT,
+    policyDelta: NEUTRAL_POLICY_INPUT,
     world: NEUTRAL_WORLD,
     consumerConfidencePrev: 50,
     businessConfidencePrev: 50,
@@ -52,13 +53,21 @@ describe('computeGrowth', () => {
     expect(growth).toBeCloseTo(1.2 + 0.8 * DEFAULT_ECONOMIC_ENGINE_CONFIG.growth.productivityPassthrough)
   })
 
-  it('a positive public-investment impulse increases growth', () => {
+  it('a positive public-investment impulse (a CHANGE in policy stance) increases growth', () => {
     const neutral = computeGrowth(baseInput())
-    const stimulated = computeGrowth(
-      baseInput({ policyInput: { ...NEUTRAL_POLICY_INPUT, publicInvestmentChanges: 20 } }),
-    )
+    const stimulusDelta = { ...NEUTRAL_POLICY_INPUT, publicInvestmentChanges: 20 }
+    const stimulated = computeGrowth(baseInput({ policyDelta: stimulusDelta }))
     expect(stimulated.growth).toBeGreaterThan(neutral.growth)
     expect(stimulated.contributions.fiscalImpulse).toBeGreaterThan(0)
+  })
+
+  it('a SUSTAINED public-investment level with no further change contributes nothing further to growth', () => {
+    // policyInput carries the sustained level, but policyDelta (the change since last turn) is
+    // neutral — growth must not keep being boosted turn after turn by an unchanging spending level.
+    const sustained = computeGrowth(
+      baseInput({ policyInput: { ...NEUTRAL_POLICY_INPUT, publicInvestmentChanges: 20 }, policyDelta: NEUTRAL_POLICY_INPUT }),
+    )
+    expect(sustained.contributions.fiscalImpulse).toBeCloseTo(0)
   })
 
   it('a tax increase (positive tax impulse) reduces growth', () => {
@@ -101,12 +110,9 @@ describe('computeGrowth', () => {
   })
 
   it('public sector efficiency scales the effectiveness of public investment', () => {
-    const inefficient = computeGrowth(
-      baseInput({ policyInput: { ...NEUTRAL_POLICY_INPUT, publicInvestmentChanges: 20 }, publicSectorEfficiencyPrev: 20 }),
-    )
-    const efficient = computeGrowth(
-      baseInput({ policyInput: { ...NEUTRAL_POLICY_INPUT, publicInvestmentChanges: 20 }, publicSectorEfficiencyPrev: 90 }),
-    )
+    const investmentDelta = { ...NEUTRAL_POLICY_INPUT, publicInvestmentChanges: 20 }
+    const inefficient = computeGrowth(baseInput({ policyDelta: investmentDelta, publicSectorEfficiencyPrev: 20 }))
+    const efficient = computeGrowth(baseInput({ policyDelta: investmentDelta, publicSectorEfficiencyPrev: 90 }))
     expect(efficient.growth).toBeGreaterThan(inefficient.growth)
   })
 })

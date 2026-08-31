@@ -12,6 +12,6 @@ export function createInitialWorldState(): WorldState {
     ecbRate: 3.0, // %/year, placeholder
     oilPriceIndex: 100, // index, 100 = baseline at campaign start, placeholder
     globalTradeGrowth: 2.0, // %/year, placeholder
-    externalInflation: 2.0, // %/year, placeholder
+    externalInflation: 1.7, // %/year, placeholder — matches the M1.5 inflation calibration reference
   }
 }

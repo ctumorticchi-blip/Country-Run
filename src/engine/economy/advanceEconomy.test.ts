@@ -215,4 +215,77 @@ describe('advanceEconomicTurn', () => {
 
     expect(runFiveTurns()).toEqual(runFiveTurns())
   })
+
+  // --- M1.5 calibration regression guards -----------------------------------------------
+  // These target the exact root-cause bugs found during M1.5 recalibration: policyInput
+  // fields are a SUSTAINED level (see types.ts, "Policy input units"), not a fresh action to
+  // repeat every turn. Passing the same nonzero policyInput on consecutive turns must not
+  // silently 6x it, and must not keep re-adding it forever.
+
+  it('does not amplify a single turn of policy by 6x (annual vs per-turn confusion)', () => {
+    const state = makeGameState()
+    const policy: EconomicPolicyInput = { ...NEUTRAL_POLICY_INPUT, currentSpendingChanges: 12 }
+    const { nextState } = advanceEconomicTurn(state, policy, NEUTRAL_WORLD, new SeededRng('amplification-check'), DEFAULT_ECONOMIC_ENGINE_CONFIG)
+
+    const spendingDelta = nextState.economic.publicSpending - state.economic.publicSpending
+    // A ×6 bug would push this delta up near 12*6=72 (plus organic drift/interest); the correct
+    // behavior is close to the policy's own +12 (plus a small amount of baseline drift/interest).
+    expect(spendingDelta).toBeGreaterThan(8)
+    expect(spendingDelta).toBeLessThan(30)
+  })
+
+  it('does not repeatedly re-add a sustained level policy every turn it stays active', () => {
+    // Start with effectiveDebtRate already at its steady state (ecbRate + baselineSpread, at
+    // neutral confidence) so there's no legitimate multi-turn interest-cost catch-up to conflate
+    // with the thing under test — isolating the policy-delta behavior cleanly.
+    let state = makeGameState({
+      economic: { ...makeGameState().economic, effectiveDebtRate: 3.5, interestCost: 112, publicSpending: 1542 },
+    })
+    const policy: EconomicPolicyInput = { ...NEUTRAL_POLICY_INPUT, currentSpendingChanges: 10 }
+    const rng = new SeededRng('sustained-policy-check')
+    let previousPolicyInput = NEUTRAL_POLICY_INPUT
+    const spendingByTurn: number[] = [state.economic.publicSpending]
+
+    for (let i = 0; i < 5; i++) {
+      state = advanceEconomicTurn(state, policy, NEUTRAL_WORLD, rng, DEFAULT_ECONOMIC_ENGINE_CONFIG, [], previousPolicyInput).nextState
+      previousPolicyInput = policy
+      spendingByTurn.push(state.economic.publicSpending)
+    }
+
+    // Turn 1 absorbs the full +10 policy change; every turn after that, spending should only
+    // move by a small amount of organic baseline drift, never another +10.
+    for (let i = 2; i < spendingByTurn.length; i++) {
+      const turnOverTurnChange = (spendingByTurn[i] ?? 0) - (spendingByTurn[i - 1] ?? 0)
+      expect(turnOverTurnChange).toBeLessThan(10)
+    }
+  })
+
+  it('a sustained structural investment schedules only ONE delayed effect, not one per turn', () => {
+    let state = makeGameState()
+    const policy: EconomicPolicyInput = { ...NEUTRAL_POLICY_INPUT, infrastructureInvestment: 20 }
+    const rng = new SeededRng('sustained-structural-check')
+    let previousPolicyInput = NEUTRAL_POLICY_INPUT
+
+    for (let i = 0; i < 4; i++) {
+      state = advanceEconomicTurn(state, policy, NEUTRAL_WORLD, rng, DEFAULT_ECONOMIC_ENGINE_CONFIG, [], previousPolicyInput).nextState
+      previousPolicyInput = policy
+    }
+
+    expect(state.delayedEffects).toHaveLength(1)
+  })
+
+  it('reversing a sustained policy back to neutral does not leave a residual repeated effect', () => {
+    let state = makeGameState()
+    const policy: EconomicPolicyInput = { ...NEUTRAL_POLICY_INPUT, currentSpendingChanges: 10 }
+    const rng = new SeededRng('policy-reversal-check')
+
+    state = advanceEconomicTurn(state, policy, NEUTRAL_WORLD, rng, DEFAULT_ECONOMIC_ENGINE_CONFIG).nextState
+    const spendingAfterPolicy = state.economic.publicSpending
+
+    // Reverse the policy: back to neutral, with the policy stance as "previous".
+    state = advanceEconomicTurn(state, NEUTRAL_POLICY_INPUT, NEUTRAL_WORLD, rng, DEFAULT_ECONOMIC_ENGINE_CONFIG, [], policy).nextState
+
+    // Reversing should pull spending back down toward (not below-by-a-lot, not still-rising-by-10) its pre-policy path.
+    expect(state.economic.publicSpending).toBeLessThan(spendingAfterPolicy)
+  })
 })

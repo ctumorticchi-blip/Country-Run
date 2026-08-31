@@ -1,4 +1,4 @@
-# Economic Engine (M1)
+# Economic Engine (M1, recalibrated at M1.5)
 
 This document explains Country Run's macroeconomic simulation engine
 (`src/engine/economy/`): the units it uses, the order it runs a turn's
@@ -6,6 +6,15 @@ calculations in, its formulas, its configuration, and its known
 limitations. It is a companion to `docs/ARCHITECTURE.md` (the overall
 technical foundation) and to `Country_Run_Product_Bible_V1.docx` §6-§7 (the
 product source of truth for what the engine is supposed to feel like).
+
+**M1.5 note:** the first M1 pass produced trajectories that were
+directionally correct but economically far too extreme over a 5-year
+mandate (e.g. debt ratio swinging from ~111% to ~164% under a strong
+investment stance, or collapsing to ~4% under consolidation). M1.5 found
+and fixed the root cause — policy inputs were being re-applied every turn
+instead of only when they change — and retuned several coefficients
+against an approximate France-2027 reference. See "Policy input units"
+and "Calibration Status" below for the specifics.
 
 **This is a gameplay model, not an economic forecasting tool.** Every
 coefficient in `engine/economy/config/defaultConfig.ts` is a starting
@@ -67,6 +76,59 @@ compound. Only *rates* (percentage growth) go through
 up is exactly the class of bug `annualization.test.ts` and the
 `advanceEconomy` integration tests are written to catch.
 
+## Policy input units — the M1.5 fix
+
+**The root cause of M1's extreme scenario magnitudes**: `EconomicPolicyInput`
+fields are documented as a *sustained annualized level* (`publicInvestmentChanges:
+10` means "public investment is €10bn/year higher than baseline, for as
+long as this value keeps being passed in" — see `types.ts`). The original
+M1 code instead treated every nonzero field as a fresh action to repeat
+*every turn it was supplied* — so a scenario that sustained the same
+policy stance for 30 turns had that stance's spending, revenue, and
+structural investment effects added again and again, linearly runaway
+over the mandate. A €5bn/year sustained spending increase, held for 5
+years, was silently becoming a spending path some €150bn/year higher by
+year 5 (30 turns × €5bn) instead of staying at €5bn/year higher — and the
+same investment amount was scheduling a brand new structural
+productivity-boosting `DelayedEffect` every single turn it stayed active,
+stacking dozens of overlapping effects instead of the one the policy
+represents.
+
+**The fix**: `computePolicyDelta(current, previous)` (`policyDelta.ts`)
+computes the turn-over-turn *change* in policy stance. `advanceEconomy`
+calls it once per turn and uses the delta — not the raw level — for
+anything that accumulates into a stock or schedules a one-off effect:
+
+- `publicRevenue`/`publicSpending` (`fiscal.ts`) — a sustained policy now
+  applies its full effect once, the turn it starts (or changes), then
+  holds; an unchanged policy contributes nothing further.
+- The structural `DelayedEffect`s scheduled in `productivity.ts`
+  (infrastructure/research/education investment, labor-market/public-sector
+  reform) — a sustained, unchanged investment schedules nothing further
+  after the turn it starts; only a *change* (new or larger investment)
+  schedules a new (or incremental) effect.
+- The **spending-side** terms of growth's `fiscalImpulse` (`currentSpendingChanges`,
+  `publicInvestmentChanges`, `transfersChanges`) — also delta-based. A
+  permanently elevated spending level was otherwise re-boosting the growth
+  **rate** every single turn for as long as the policy lasted, not just
+  during the adjustment period, which was strong enough to raise nominal
+  GDP fast enough to fully offset (or overshoot) the extra debt burden in
+  ratio terms — silently making sustained investment "pay for itself" and
+  sustained consolidation "cost" nothing, the opposite of both scenarios'
+  intent. This also matches the Product Bible's own framing (§6,
+  "Temporalité des effets") of spending/investment demand effects as a
+  12-24 month *adjustment*, not a permanent-for-as-long-as-sustained boost.
+
+**Deliberately still level-based** (not diffed): the growth formula's
+**tax-impulse** terms (`businessTaxImpulse`, `householdTaxImpulse`), the
+inflation formula's tax pass-through, and the confidence formulas' tax/level
+signals. These don't accumulate into a stock the way spending does, so a
+sustained policy there produces a bounded, non-explosive, continuous
+effect — representing a persistent economic "climate" (a permanently
+higher tax burden is a permanently less favorable business environment)
+rather than a repeated action. See `types.ts` for the full field-by-field
+breakdown of which terms read the level and which read the delta.
+
 ## Order of execution for one turn
 
 `advanceEconomicTurn` (`advanceEconomy.ts`) is the full pipeline:
@@ -82,11 +144,11 @@ up is exactly the class of bug `annualization.test.ts` and the
 3. **`potentialGrowth`** — labor + productivity, recomputed fresh from the
    (already-matured) `productivityGrowth` every turn.
 4. **`growth`** — potential growth + fiscal impulse (short-term demand
-   effect of this turn's discretionary spending/investment/tax deltas,
-   scaled by `publicSectorEfficiency`) + external effect (Eurozone/trade
-   growth) + confidence effect (using *previous*-turn confidence, to avoid
-   circularity) + productivity passthrough + crisis effect (from shocks) +
-   controlled noise.
+   effect of this turn's *change* in discretionary spending/investment,
+   scaled by `publicSectorEfficiency`, plus the sustained tax-impulse
+   level) + external effect (Eurozone/trade growth) + confidence effect
+   (using *previous*-turn confidence, to avoid circularity) + productivity
+   passthrough + crisis effect (from shocks) + controlled noise.
 5. **`unemployment`** — Okun's-law-style cyclical response to the
    growth/potential gap, plus a slow drift toward `structuralUnemployment`.
    `structuralUnemployment` itself does not move here — only via matured
@@ -149,16 +211,21 @@ growth = potentialGrowth
        + controlledNoise
 ```
 
-`fiscalImpulse` converts Md€/year policy deltas into an annualized
+`fiscalImpulse` converts Md€/year policy *changes* into an annualized
 growth-pp contribution by dividing by current GDP and scaling by a
-per-category multiplier (`config.growth.fiscalMultiplier`). Public
-investment's multiplier is additionally scaled by `publicSectorEfficiency
-/ 100` (Product Bible §6: "Services publics = dépenses/investissements ×
-efficacité"). Only the *short-term* multiplier applies here — long-horizon
-effects of investment categories go through delayed effects instead (see
-"Productivity" below), so growth doesn't double-count a policy's payoff as
-both an instant demand bump and a future productivity bump from the same
-multiplier.
+per-category multiplier (`config.growth.fiscalMultiplier`). The
+spending-side terms (`currentSpendingChanges`, `publicInvestmentChanges`,
+`transfersChanges`) use the policy **delta** (see "Policy input units"
+above), not the raw sustained level — so this is a temporary adjustment
+effect, not a permanent one, matching the tax-impulse terms
+(`businessTaxImpulse`, `householdTaxImpulse`), which stay level-based.
+Public investment's multiplier is additionally scaled by
+`publicSectorEfficiency / 100` (Product Bible §6: "Services publics =
+dépenses/investissements × efficacité"). Only the *short-term* multiplier
+applies here — long-horizon effects of investment categories go through
+delayed effects instead (see "Productivity" below), so growth doesn't
+double-count a policy's payoff as both an instant demand bump and a future
+productivity bump from the same multiplier.
 
 ## Debt & interest
 
@@ -292,19 +359,63 @@ formula code.
 
 ### Calibration Status
 
-**Every coefficient in `DEFAULT_ECONOMIC_ENGINE_CONFIG` is PLACEHOLDER /
-CALIBRATION NEEDED.** None are VALIDATED FOR GAMEPLAY yet. They were
-picked to be internally consistent and directionally sensible (verified by
-the unit tests and the 5-year scenario comparison, `npm run
-test:scenarios`), not tuned across many playthroughs. In particular, the
-5-year scenario runs show the investment-led and consolidation scenarios
-producing quite large swings in `debtRatio` (roughly 118% → 164%, and 111%
-→ 4%, respectively, over 30 turns) — directionally correct, but likely too
-extreme for a satisfying difficulty curve. Rebalancing
-`growth.fiscalMultiplier`, `spending.baselineDrift`, and the
-confidence-to-growth feedback strength is flagged as follow-up tuning work,
-not a blocking bug — invariants and plausibility checks pass at every turn
-in every scenario.
+**Every coefficient in `DEFAULT_ECONOMIC_ENGINE_CONFIG` is still
+PLACEHOLDER / CALIBRATION NEEDED.** None are VALIDATED FOR GAMEPLAY. M1.5
+re-tuned several of them against an approximate France-2027 *calibration
+reference* (growth ≈ 0.9%/year, inflation ≈ 1.7%, unemployment ≈ 8.1%,
+deficitRatio ≈ 5%, debtRatio ≈ 120% — used to pick plausible starting
+magnitudes for the gameplay model, not sourced/official figures — see
+`initialState.ts`) so a *neutral* policy stance stays roughly in that
+neighborhood over a 5-year mandate instead of drifting toward balance (or
+away from it) "for free". None of this makes the numbers scientifically
+validated — it makes the starting point for further tuning materially
+less broken.
+
+**Logic/unit bugs fixed at M1.5** (these are correctness fixes, not
+coefficient tuning — see "Policy input units" above for the full
+explanation):
+
+1. `publicRevenue`/`publicSpending` re-accumulated a sustained policy's
+   full level every turn instead of only on the turn it changed
+   (`fiscal.ts`, now fed the policy *delta* from `advanceEconomy`).
+2. `scheduleStructuralDelayedEffects` scheduled a brand new structural
+   `DelayedEffect` every turn a sustained investment/reform stayed active,
+   instead of only when it changed (`productivity.ts`, same delta fix).
+3. Growth's `fiscalImpulse` spending-side terms used the raw sustained
+   policy level, letting a permanent spending increase keep re-boosting
+   the growth *rate* forever instead of just during the adjustment period
+   — strong enough to let investment "pay for itself" and consolidation
+   "cost nothing" in the debt ratio, inverting both scenarios' intent
+   (`growth.ts`, now uses the delta for these three terms specifically).
+
+**Coefficients changed at M1.5** (`defaultConfig.ts`):
+
+| Coefficient | Old | New | Why |
+|---|---|---|---|
+| `growth.productivityPassthrough` | 0.5 | 0.15 | Was double-counting productivity's contribution to growth (already counted once via `potentialGrowth`'s own passthrough), keeping growth persistently ~1pp above potential under neutral policy and making unemployment drift down "for free" over 5 years. |
+| `growth.externalEurozoneWeight` | 0.3 | 0.15 | Same symptom as above — a *constant* (shock-free) external tailwind was too large a permanent addition to growth under "normal external conditions". |
+| `growth.externalTradeWeight` | 0.1 | 0.05 | Same reason as `externalEurozoneWeight`. |
+| `inflation.externalPassthrough` | 0.5 | 1.0 | At 0.5, the steady-state inflation was only *half* of the calibration-reference `externalInflation` figure, so the world dataset's stated "1.7% imported inflation" never actually showed up as ~1.7% domestic inflation even absent any other pressure. Full pass-through in the neutral steady state now matches the reference directly. |
+| `spending.baselineDrift` | 1.5 | 2.6 | Was below the reference nominal growth (~potentialGrowth + inflation ≈ 2.6%), so under a neutral policy, revenue (which grows with nominal GDP) permanently outpaced spending — deficit and debt ratio drifted toward balance "for free" over 5 years, the opposite of "sticky". Set to match the reference nominal growth rate instead. |
+| `revenue.elasticity` | 1.0 | 0.9 | Modest reduction so growth differences between scenarios don't translate quite as strongly into revenue differences — was amplifying the "growth pays for itself" / "growth costs itself" effect described in bug #3 above. |
+| `debt.riskPremiumPerConfidencePoint` | 0.03 | 0.015 | The market-confidence → interest-rate feedback loop was strong enough, on its own, to *flip the sign* of a 5-year scenario's debt-ratio outcome (a growth-driven confidence hit under consolidation was raising borrowing costs enough to make consolidation end up with *higher* debt than neutral). Halved to keep it a plausible secondary effect rather than dominating the direct fiscal effect. |
+| `confidence.market.growthWeight` | 2 | 1 | Same feedback loop as `riskPremiumPerConfidencePoint` — halved for the same reason, from the other end of the loop. |
+| `productivity.infrastructureEffectPerBillion` | 0.002 | 0.006 | After fixing bug #3 (growth's demand impulse is now temporary), a sustained investment policy's *only* lasting GDP effect is through these structural productivity effects — the original magnitudes were too small to produce a visible, non-noise-dominated GDP difference over a 5-year mandate. Roughly tripled. |
+| `productivity.researchEffectPerBillion` | 0.003 | 0.008 | Same reason as `infrastructureEffectPerBillion`. |
+| `productivity.educationEffectPerBillion` | 0.0015 | 0.003 | Same reason (education's 30-turn delay means it mostly matters for mandates/analyses beyond the 5-year comparison window, but kept proportionate). |
+
+Also changed as **data, not engine coefficients**: `initialState.ts`'s
+placeholder starting `EconomicState` and `initialWorldState.ts`'s
+`externalInflation` were updated to match the France-2027 calibration
+reference above (previously arbitrary round numbers not tied to any
+reference point).
+
+The 5-year scenario comparison (`npm run test:scenarios`) is now the
+regression suite for "does a policy stance still land in a plausible
+band" — see `advanceEconomy.scenarios.test.ts`'s "calibration guardrails"
+describe blocks. Further tuning (getting the target bands' *centers*
+right, not just avoiding catastrophic magnitudes) remains explicitly
+future work.
 
 ## Limitations
 
@@ -332,3 +443,15 @@ in every scenario.
   interest-rate spread react to a degrading trajectory, but there's no
   simulated debt crisis / default event in M1 (Product Bible-consistent:
   that's a bigger design question for a later milestone, if ever).
+- **Calibration bands, not precise targets, as of M1.5.** The 5-year
+  scenario comparison lands within the M1.5 brief's directional bands
+  (investment raises debt ratio vs. neutral, consolidation lowers it,
+  neither scenario collapses or explodes), but sits toward the *narrower*
+  end of some target ranges rather than their center — e.g. the sustained
+  investment/consolidation scenarios' debt-ratio spread vs. neutral by
+  year 5 is a few points, nearer the lower bound of the brief's "+5 to
+  +15pp" / "5 to 15pp below" bands than the middle. Widening that spread
+  (larger fiscal multipliers, or simply larger example policy magnitudes)
+  is flagged as follow-up tuning, not a defect — the guardrail tests
+  assert the *direction* and a *ceiling* on magnitude, not an exact
+  target.

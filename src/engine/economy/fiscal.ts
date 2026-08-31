@@ -7,7 +7,14 @@ export interface ComputeRevenueInput {
   publicRevenuePrev: number
   /** growth + inflation for the turn (nominal growth proxy), annualized %. */
   nominalGrowth: number
-  /** Annualized Md€/year policy delta — applied to the run-rate in full, not divided by turns/year (see docs/ECONOMIC_ENGINE.md). */
+  /**
+   * The CHANGE in `taxChanges` since last turn (`computePolicyDelta(...).taxChanges`),
+   * NOT the raw sustained policyInput value — applied to the run-rate in
+   * full, not divided by turns/year. Passing the raw level here instead of
+   * the delta would re-add a sustained policy's full annual effect every
+   * turn it stays active, compounding without bound (see types.ts,
+   * "Policy input units", and docs/ECONOMIC_ENGINE.md).
+   */
   taxChanges: number
   rng: SeededRng
   config: EconomicEngineConfig['revenue']
@@ -19,7 +26,7 @@ export interface ComputeRevenueInput {
  * PERCENTAGE RATE, so it must go through `annualPercentToPerTurnFraction`
  * before compounding the level — unlike `taxChanges`, which is already an
  * annualized Md€/year delta and applies to the run-rate directly, in full,
- * as soon as the policy takes effect.
+ * the turn the policy changes.
  */
 export function computePublicRevenue(input: ComputeRevenueInput): { publicRevenue: number; revenueSurprise: number } {
   const { publicRevenuePrev, nominalGrowth, taxChanges, config } = input
@@ -38,6 +45,12 @@ export interface ComputeSpendingInput {
   publicSpendingPrev: number
   interestCostPrev: number
   interestCostNext: number
+  /**
+   * The CHANGE in each of these three fields since last turn
+   * (`computePolicyDelta(...)`), NOT the raw sustained policyInput values —
+   * see the `taxChanges` doc on `ComputeRevenueInput` above for why: the
+   * raw level would compound every turn a sustained policy stays active.
+   */
   currentSpendingChanges: number
   publicInvestmentChanges: number
   transfersChanges: number
@@ -47,7 +60,7 @@ export interface ComputeSpendingInput {
 /**
  * publicSpending is also an annualized Md€/year run-rate: `primarySpending`
  * (everything except interest) drifts at a small configured baseline pace
- * and absorbs this turn's discretionary policy deltas directly, then
+ * and absorbs this turn's discretionary policy CHANGES directly, then
  * `interestCost` (computed separately in debt.ts, using its own dedicated
  * refinancing formula) is layered back on top.
  */

@@ -28,11 +28,11 @@ function baseInput(overrides?: Partial<ComputeInflationInput>): ComputeInflation
 
 describe('computeInflation', () => {
   it('holds steady at its own equilibrium when nothing changes turn over turn', () => {
-    // With externalPassthrough=0.5 and externalInflation=2.0, the model's steady state is
-    // externalInflation * externalPassthrough = 1.0 — not externalInflation itself, since only
-    // half of it passes through. Starting exactly at that equilibrium should reproduce it.
-    const { inflation } = computeInflation(baseInput({ inflationPrev: 1.0 }))
-    expect(inflation).toBeCloseTo(1.0, 1)
+    // With externalPassthrough=1.0 (M1.5), the model's steady state is externalInflation
+    // itself (2.0 in this fixture's world default) — full pass-through of imported inflation
+    // absent any domestic demand/energy/tax pressure. Starting there should reproduce it.
+    const { inflation } = computeInflation(baseInput({ inflationPrev: 2.0 }))
+    expect(inflation).toBeCloseTo(2.0, 1)
   })
 
   it('an energy shock (oil price spike) raises inflation', () => {

@@ -18,25 +18,34 @@ export function driftProductivityGrowth(productivityGrowthPrev: number, config: 
 }
 
 /**
- * Turns this turn's structural policy inputs into DelayedEffects the
- * caller must merge into `state.delayedEffects` (via `scheduleDelayedEffect`
- * from `engine/effects`). Investment categories mature at different
- * horizons (Product Bible §15: infrastructure medium-term, R&D long-term
- * and uncertain, education very slow, public sector reform its own
- * horizon) — reusing the M0 delayed-effects system as-is, unmodified.
+ * Turns this turn's CHANGE in structural policy stance into DelayedEffects
+ * the caller must merge into `state.delayedEffects` (via
+ * `scheduleDelayedEffect` from `engine/effects`). Investment categories
+ * mature at different horizons (Product Bible §15: infrastructure
+ * medium-term, R&D long-term and uncertain, education very slow, public
+ * sector reform its own horizon) — reusing the M0 delayed-effects system
+ * as-is, unmodified.
  *
- * Only non-zero inputs schedule an effect, to avoid cluttering the queue.
+ * `policyDelta` must be the CHANGE since last turn (`computePolicyDelta`),
+ * not the raw sustained policyInput — a sustained, unchanged investment
+ * has a delta of 0 and schedules nothing further; only a NEW or INCREASED
+ * investment schedules a new (or additional, incremental) effect. Passing
+ * the raw level here instead would reschedule the same structural program
+ * from scratch every turn it stays active, stacking without bound (see
+ * types.ts, "Policy input units").
+ *
+ * Only non-zero deltas schedule an effect, to avoid cluttering the queue.
  */
 export function scheduleStructuralDelayedEffects(
   currentTurn: Turn,
-  policyInput: EconomicPolicyInput,
+  policyDelta: EconomicPolicyInput,
   rng: SeededRng,
   config: EconomicEngineConfig['productivity'],
   unemploymentConfig: EconomicEngineConfig['unemployment'],
 ): DelayedEffect[] {
   const effects: DelayedEffect[] = []
 
-  if (policyInput.infrastructureInvestment !== 0) {
+  if (policyDelta.infrastructureInvestment !== 0) {
     effects.push({
       id: `infrastructure-t${String(currentTurn)}`,
       sourceId: 'infrastructureInvestment',
@@ -44,12 +53,12 @@ export function scheduleStructuralDelayedEffects(
       effect: {
         type: 'add',
         path: 'economic.productivityGrowth',
-        value: policyInput.infrastructureInvestment * config.infrastructureEffectPerBillion,
+        value: policyDelta.infrastructureInvestment * config.infrastructureEffectPerBillion,
       },
     })
   }
 
-  if (policyInput.researchInvestment !== 0) {
+  if (policyDelta.researchInvestment !== 0) {
     const uncertainty = controlledNoise(rng, config.researchUncertainty)
     effects.push({
       id: `research-t${String(currentTurn)}`,
@@ -58,12 +67,12 @@ export function scheduleStructuralDelayedEffects(
       effect: {
         type: 'add',
         path: 'economic.productivityGrowth',
-        value: policyInput.researchInvestment * config.researchEffectPerBillion * (1 + uncertainty),
+        value: policyDelta.researchInvestment * config.researchEffectPerBillion * (1 + uncertainty),
       },
     })
   }
 
-  if (policyInput.educationInvestment !== 0) {
+  if (policyDelta.educationInvestment !== 0) {
     effects.push({
       id: `education-t${String(currentTurn)}`,
       sourceId: 'educationInvestment',
@@ -71,12 +80,12 @@ export function scheduleStructuralDelayedEffects(
       effect: {
         type: 'add',
         path: 'economic.productivityGrowth',
-        value: policyInput.educationInvestment * config.educationEffectPerBillion,
+        value: policyDelta.educationInvestment * config.educationEffectPerBillion,
       },
     })
   }
 
-  if (policyInput.laborMarketReform !== 0) {
+  if (policyDelta.laborMarketReform !== 0) {
     effects.push({
       id: `labor-reform-t${String(currentTurn)}`,
       sourceId: 'laborMarketReform',
@@ -84,13 +93,13 @@ export function scheduleStructuralDelayedEffects(
       effect: {
         type: 'subtract',
         path: 'economic.structuralUnemployment',
-        value: policyInput.laborMarketReform * unemploymentConfig.structuralReformEffectPerIntensity,
+        value: policyDelta.laborMarketReform * unemploymentConfig.structuralReformEffectPerIntensity,
         min: unemploymentConfig.minUnemployment,
       },
     })
   }
 
-  if (policyInput.publicSectorReform !== 0) {
+  if (policyDelta.publicSectorReform !== 0) {
     effects.push({
       id: `public-sector-reform-t${String(currentTurn)}`,
       sourceId: 'publicSectorReform',
@@ -98,7 +107,7 @@ export function scheduleStructuralDelayedEffects(
       effect: {
         type: 'add',
         path: 'economic.publicSectorEfficiency',
-        value: policyInput.publicSectorReform * config.publicSectorReformEfficiencyEffectPerIntensity,
+        value: policyDelta.publicSectorReform * config.publicSectorReformEfficiencyEffectPerIntensity,
         max: 100,
       },
     })

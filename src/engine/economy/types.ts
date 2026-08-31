@@ -44,6 +44,33 @@ export interface ExternalShock {
  * Bible §16, "Tout coefficient économique important doit être
  * configurable").
  *
+ * ## Policy input units — read this before wiring up a caller
+ *
+ * Every numeric field here is a **sustained annualized level or
+ * intensity**, not a one-off action to repeat. Concretely:
+ * `publicInvestmentChanges: 10` means **"public investment spending is
+ * €10bn/year higher than the pre-policy baseline, for as long as this
+ * value keeps being passed in"** — it does NOT mean "spend an additional
+ * €10bn every 2-month turn" (which would silently become €60bn/year, or
+ * compound without bound if repeated). A caller representing "the player
+ * enacted this policy and it stays in effect" should pass the SAME
+ * `EconomicPolicyInput` on every subsequent turn; passing `NEUTRAL_POLICY_INPUT`
+ * again means the policy has been fully reversed.
+ *
+ * The engine enforces this by computing `computePolicyDelta(current,
+ * previous)` (`policyDelta.ts`) once per turn in `advanceEconomy` and using
+ * that delta — not the raw level — for anything that accumulates into a
+ * stock: the `publicRevenue`/`publicSpending` run-rate levels (`fiscal.ts`)
+ * and the one-off structural delayed effects scheduled in
+ * `productivity.ts`. A sustained, unchanged policy therefore applies its
+ * full effect once (the turn it starts, or changes), then holds — it never
+ * re-adds itself. The demand-side growth impulse, the inflation
+ * pass-through, and the confidence signals are the deliberate exception:
+ * they read the raw (level) policyInput fresh every turn, because a
+ * sustained fiscal stance is meant to keep contributing a bounded,
+ * continuous effect to those RATES for as long as it lasts (see
+ * docs/ECONOMIC_ENGINE.md, "Policy input units").
+ *
  * Units: the `*Changes` fiscal fields and the `*Investment` fields are
  * annualized Md€/year deltas relative to the current baseline. The
  * `*TaxImpulse` fields are annualized Md€/year of net revenue effect

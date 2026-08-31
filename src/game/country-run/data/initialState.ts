@@ -18,35 +18,43 @@ import type { GameState, Seed } from '../../../engine/state/gameState.ts'
 const PLACEHOLDER_STARTING_YEAR = 2027
 const PLACEHOLDER_STARTING_MONTH = 1
 
+/**
+ * Approximate France-2027 CALIBRATION REFERENCE (M1.5): growth ≈ 0.9%,
+ * inflation ≈ 1.7%, unemployment ≈ 8.1%, deficitRatio ≈ 5%, debtRatio ≈
+ * 120%. These are calibration targets used to pick plausible starting
+ * magnitudes for the gameplay model — NOT the sourced, official France
+ * 2027 dataset (still a separate future milestone; see the file-level
+ * warning above).
+ */
 const PLACEHOLDER_ECONOMIC_STATE = {
   gdp: 2800, // Md€, placeholder order of magnitude only
   nominalGdp: 2800, // Md€, placeholder — equal to real GDP at t=0 (index base)
-  potentialGrowth: 1.2, // %/year, placeholder
-  growth: 1.1, // %/year, placeholder
-  inflation: 2.0, // %/year, placeholder
+  potentialGrowth: 0.9, // %/year, placeholder — matches the growth calibration reference
+  growth: 0.9, // %/year, placeholder — starts at potential (no cyclical gap)
+  inflation: 1.7, // %/year, placeholder — matches the inflation calibration reference
 
-  unemployment: 7.5, // %, placeholder
-  structuralUnemployment: 7.0, // %, placeholder
+  unemployment: 8.1, // %, placeholder — matches the unemployment calibration reference
+  structuralUnemployment: 8.1, // %, placeholder — starts equal to unemployment (no cyclical gap)
 
-  publicRevenue: 1350, // Md€/year run-rate, placeholder
-  publicSpending: 1500, // Md€/year run-rate, placeholder (includes interestCost below)
-  fiscalBalance: -150, // Md€/year, placeholder (publicRevenue - publicSpending)
-  deficit: 150, // Md€/year, placeholder (max(0, -fiscalBalance))
-  deficitRatio: 5.4, // % of nominal GDP, placeholder
+  publicRevenue: 1372, // Md€/year run-rate, placeholder
+  publicSpending: 1512, // Md€/year run-rate, placeholder (includes interestCost below) — deficit = 140 => ~5% of GDP
+  fiscalBalance: -140, // Md€/year, placeholder (publicRevenue - publicSpending)
+  deficit: 140, // Md€/year, placeholder (max(0, -fiscalBalance))
+  deficitRatio: 5.0, // % of nominal GDP, placeholder — matches the deficit calibration reference
 
-  debt: 3200, // Md€, placeholder
-  debtRatio: 114.3, // % of nominal GDP, placeholder
+  debt: 3360, // Md€, placeholder — 120% of nominal GDP
+  debtRatio: 120.0, // % of nominal GDP, placeholder — matches the debt calibration reference
 
-  effectiveDebtRate: 2.2, // %/year blended rate on the debt stock, placeholder
-  interestCost: 70, // Md€/year, placeholder (effectiveDebtRate% × debt)
+  effectiveDebtRate: 3.0, // %/year blended rate on the debt stock, placeholder — close to ECB rate + baseline spread, so it doesn't lurch on turn 1
+  interestCost: 100.8, // Md€/year, placeholder (effectiveDebtRate% × debt)
 
   purchasingPower: 0, // cumulative index, 0 = baseline at game start, placeholder
 
-  productivityGrowth: 0.8, // %/year, placeholder
+  productivityGrowth: 0.83, // %/year, placeholder — chosen so labor + productivity*passthrough ≈ potentialGrowth at turn 1
 
   consumerConfidence: 50, // index 0-100, placeholder (neutral)
   businessConfidence: 50, // index 0-100, placeholder (neutral)
-  marketConfidence: 55, // index 0-100, placeholder
+  marketConfidence: 50, // index 0-100, placeholder (neutral — was 55; a debt/deficit level already near the soft concern thresholds shouldn't start "above neutral")
 
   publicSectorEfficiency: 55, // index 0-100, placeholder
 } satisfies GameState['economic']

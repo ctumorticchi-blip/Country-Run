@@ -10,10 +10,12 @@ import { computeFiscalBalance, computePublicRevenue, computePublicSpending } fro
 import { computeGrowth, computePotentialGrowth } from './growth.ts'
 import { computeInflation } from './inflation.ts'
 import { applyEconomicInvariants } from './invariants.ts'
+import { computePolicyDelta } from './policyDelta.ts'
 import { computePurchasingPower } from './purchasingPower.ts'
 import { driftProductivityGrowth, scheduleStructuralDelayedEffects } from './productivity.ts'
 import { computeUnemployment } from './unemployment.ts'
 import type { EconomicDiagnostics, EconomicPolicyInput, ExternalShock, WorldState } from './types.ts'
+import { NEUTRAL_POLICY_INPUT } from './types.ts'
 import { applyExternalShocksToWorld } from './worldState.ts'
 
 export interface AdvanceEconomyResult {
@@ -30,6 +32,13 @@ export interface AdvanceEconomyResult {
  * `social`, `policy`, or `delayedEffects` directly — see
  * docs/ECONOMIC_ENGINE.md ("Ordre d'exécution d'un tour") for the exact
  * order these sub-computations run in and why.
+ *
+ * `previousPolicyInput` (defaults to `NEUTRAL_POLICY_INPUT`, i.e. "treat
+ * this turn's policyInput as entirely new") is used to compute
+ * `computePolicyDelta` once per turn — the CHANGE in policy stance since
+ * last turn, which is what the fiscal levels and structural delayed
+ * effects key off, so a sustained policy applies once and holds rather
+ * than re-adding itself every turn (see types.ts, "Policy input units").
  */
 export function advanceEconomy(
   state: GameState,
@@ -38,9 +47,11 @@ export function advanceEconomy(
   rng: SeededRng,
   config: EconomicEngineConfig,
   shocks: readonly ExternalShock[] = [],
+  previousPolicyInput: EconomicPolicyInput = NEUTRAL_POLICY_INPUT,
 ): AdvanceEconomyResult {
   const economic = state.economic
   const currentTurn = state.meta.turn
+  const policyDelta = computePolicyDelta(policyInput, previousPolicyInput)
 
   // 1. Resolve shocks against the world and pull out their immediate effects.
   const world = applyExternalShocksToWorld(worldState, shocks)
@@ -57,6 +68,7 @@ export function advanceEconomy(
     potentialGrowth,
     gdp: economic.gdp,
     policyInput,
+    policyDelta,
     world,
     consumerConfidencePrev: economic.consumerConfidence,
     businessConfidencePrev: economic.businessConfidence,
@@ -103,23 +115,24 @@ export function advanceEconomy(
   })
   const interestCostNext = computeInterestCost(effectiveDebtRateNext, economic.debt)
 
-  // 8. Revenue.
+  // 8. Revenue — uses the policy DELTA (see `policyDelta` above), not the raw level, so a
+  // sustained tax policy applies once and holds instead of re-adding itself every turn.
   const { publicRevenue: publicRevenueNext, revenueSurprise } = computePublicRevenue({
     publicRevenuePrev: economic.publicRevenue,
     nominalGrowth,
-    taxChanges: policyInput.taxChanges,
+    taxChanges: policyDelta.taxChanges,
     rng,
     config: config.revenue,
   })
 
-  // 9. Spending.
+  // 9. Spending — same policy-DELTA discipline as revenue above.
   const publicSpendingNext = computePublicSpending({
     publicSpendingPrev: economic.publicSpending,
     interestCostPrev: economic.interestCost,
     interestCostNext,
-    currentSpendingChanges: policyInput.currentSpendingChanges,
-    publicInvestmentChanges: policyInput.publicInvestmentChanges,
-    transfersChanges: policyInput.transfersChanges,
+    currentSpendingChanges: policyDelta.currentSpendingChanges,
+    publicInvestmentChanges: policyDelta.publicInvestmentChanges,
+    transfersChanges: policyDelta.transfersChanges,
     config: config.spending,
   })
 
@@ -189,11 +202,12 @@ export function advanceEconomy(
     config: config.confidence.business,
   })
 
-  // 16. Productivity drift + structural delayed effects scheduled by this turn's investments/reforms.
+  // 16. Productivity drift + structural delayed effects scheduled by this turn's CHANGE in
+  // investment/reform stance (policyDelta) — a sustained, unchanged investment schedules nothing further.
   const productivityGrowthNext = driftProductivityGrowth(economic.productivityGrowth, config.productivity)
   const scheduledDelayedEffects = scheduleStructuralDelayedEffects(
     currentTurn,
-    policyInput,
+    policyDelta,
     rng,
     config.productivity,
     config.unemployment,
@@ -253,6 +267,12 @@ export interface AdvanceEconomicTurnResult {
  * that, then merges the result — the updated economic state and any newly
  * scheduled structural delayed effects — back into a full GameState. This
  * is the function scenario simulations and (eventually) the game loop call.
+ *
+ * `previousPolicyInput` — the policyInput passed on the PRECEDING call to
+ * this function — must be threaded through by the caller turn to turn
+ * (the engine has nowhere else to remember it; `GameState` doesn't store
+ * it). Omitting it treats `policyInput` as entirely new, which is correct
+ * for the very first turn of a run.
  */
 export function advanceEconomicTurn(
   state: GameState,
@@ -261,6 +281,7 @@ export function advanceEconomicTurn(
   rng: SeededRng,
   config: EconomicEngineConfig,
   shocks: readonly ExternalShock[] = [],
+  previousPolicyInput: EconomicPolicyInput = NEUTRAL_POLICY_INPUT,
 ): AdvanceEconomicTurnResult {
   const turnAdvanced = advanceTurn(state)
   const { nextEconomicState, diagnostics, scheduledDelayedEffects } = advanceEconomy(
@@ -270,6 +291,7 @@ export function advanceEconomicTurn(
     rng,
     config,
     shocks,
+    previousPolicyInput,
   )
 
   const stateWithNewEconomy: GameState = { ...turnAdvanced, economic: nextEconomicState }
