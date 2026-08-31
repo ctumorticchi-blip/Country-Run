@@ -60,7 +60,7 @@ const PLACEHOLDER_ECONOMIC_STATE = {
 } satisfies GameState['economic']
 
 const PLACEHOLDER_POLITICAL_STATE = {
-  popularity: 50, // %, placeholder
+  popularity: 52, // %, placeholder — matches the M2 vertical-slice content spec (post-election popularity)
   parliamentSeats: 289, // seats held by the governing coalition, placeholder
   politicalCredibility: 60, // index 0-100, placeholder
 } satisfies GameState['political']

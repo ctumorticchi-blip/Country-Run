@@ -1,30 +1,35 @@
-# Architecture — Country Run (M0 Foundation + M1 Economic Engine)
+# Architecture — Country Run (M0 Foundation + M1/M1.5 Economic Engine + M2 Gameplay)
 
 This document describes the technical foundation built at Milestone M0 and
-extended at M1. It is a companion to `Country_Run_Product_Bible_V1.docx`,
-the product source of truth — this document only covers *how the code is
-organized*, not what the game is. The Economic Engine itself (formulas,
-units, annualization, configuration, calibration status) is documented
-separately in `docs/ECONOMIC_ENGINE.md` — this file only describes where it
-sits in the overall architecture.
+extended at M1/M1.5 and M2. It is a companion to
+`Country_Run_Product_Bible_V1.docx`, the product source of truth — this
+document only covers *how the code is organized*, not what the game is.
+The Economic Engine itself (formulas, units, annualization, configuration,
+calibration status) is documented separately in `docs/ECONOMIC_ENGINE.md`,
+and the Year 1 gameplay loop built on top of it in `docs/GAMEPLAY_M2.md` —
+this file only describes where each piece sits in the overall architecture.
 
-## Scope of M0 and M1
+## Scope of M0, M1/M1.5, and M2
 
 M0 built a clean, testable technical foundation: a generic simulation
 engine, a minimal (fictional, placeholder) game state for Country Run, and a
-debug shell to exercise it. M1 built the macroeconomic simulation
-(`engine/economy/`) on top of that foundation — see
-`docs/ECONOMIC_ENGINE.md` for details. Together they deliberately do
-**not** build:
+debug shell to exercise it. M1/M1.5 built and calibrated the macroeconomic
+simulation (`engine/economy/`) on top of that foundation — see
+`docs/ECONOMIC_ENGINE.md` for details. M2 built a playable Year 1 vertical
+slice (Budget Builder, a Bercy audit and energy-shock decision, a
+simplified Parliament vote, a Year 1 report) on top of the calibrated
+engine, without modifying it — see `docs/GAMEPLAY_M2.md`. Together they
+deliberately do **not** build:
 
-- the Budget Builder UI,
-- Year 1 content (decisions, events, promises, scenarios),
-- scoring, campaign, government/parliament mechanics,
-- any real design/UI polish,
-- the real, sourced France 2027 dataset.
+- the full 5-year mandate,
+- the full campaign/promise system, a real Parliament simulation, or
+  ministers/advisors,
+- scoring or a popularity model validated beyond a documented prototype,
+- the real, sourced France 2027 dataset,
+- accounts, a backend, a database, or multiplayer.
 
-These are explicitly out of scope until the vertical slice's foundation is
-validated. See "What is explicitly out of M0/M1" below for the full list.
+These are explicitly out of scope until the vertical slice is validated.
+See "What is explicitly out of scope" below for the full list.
 
 ## High-level structure
 
@@ -42,7 +47,9 @@ src/
   game/
     country-run/   — Country Run's own content and data, built on engine/ types
       data/        — createInitialGameState()/createInitialWorldState() + placeholder starting values
-      decisions/   — reserved, empty in M0
+      budget/      — M2 Budget Builder: category config + engine-facing effects (see docs/GAMEPLAY_M2.md)
+      prototype/   — M2 Year 1 flow: decisions content, popularity/Parliament/scoring heuristics, RNG-safety helper
+      decisions/   — reserved, empty (content beyond the M2 Bercy/energy decisions)
       events/      — reserved, empty in M0
       promises/    — reserved, empty in M0
       scenarios/   — reserved, empty in M0
@@ -50,9 +57,12 @@ src/
   shared/          — cross-cutting code with no game logic
     ui/            — tiny presentational React components (no business logic)
     utils/         — generic helpers (e.g. path get/set) used by engine and app
-    types/         — small cross-cutting type aliases (e.g. StatePath)
+    types/         — small cross-cutting type aliases (e.g. StatePath, DataProvenance)
 
-  app/             — the debug shell: wires engine + game/country-run into React
+  app/             — the Year 1 vertical slice's UI: wires engine + game/country-run into React
+    components/    — reusable presentational pieces (dashboard, decision card, budget card...)
+    screens/       — one component per screen in the flow (see docs/GAMEPLAY_M2.md)
+    gameReducer.ts — the single reducer driving the whole playthrough (pure — see rng.ts for why)
 ```
 
 The separation is strict in one direction: `engine/` never imports from
@@ -235,15 +245,23 @@ scheduled structural delayed effects — into a full `GameState`. See
 `docs/ECONOMIC_ENGINE.md` ("Order of execution for one turn") for the
 complete pipeline.
 
-## Debug shell (`app/`)
+## The Year 1 vertical slice (`app/`)
 
-`src/app/App.tsx` is a minimal, deliberately undesigned UI: it shows the
-game name, seed, turn, year/month, phase, and a handful of economic/social
-numbers, plus "Advance Turn" and "Reset" buttons. `src/app/useGameSession.ts`
-wires `advanceTurn` and `createInitialGameState` into a `useReducer` — this
-is the "simple state management" called for; no external state library is
-justified at this scope. `shared/ui/StatCard.tsx` is the one tiny
-presentational component factored out for reuse; it contains no game logic.
+As of M2, `src/app/App.tsx` renders the actual playable game (it replaced
+M0's bare debug shell — see git history if that minimal UI is ever needed
+again). `src/app/gameReducer.ts` is the single `useReducer` reducer
+driving the whole playthrough: every screen dispatches a plain action
+(`START_GAME`, `CHOOSE_BERCY`, `CHOOSE_PARLIAMENT`, ...), and the reducer
+— a pure function — computes the next `GamePrototypeState`, including the
+one action (`CHOOSE_PARLIAMENT`) that actually advances the real economic
+simulation. `src/app/screens/` holds one component per screen;
+`src/app/components/` holds the reusable pieces (`EconomicDashboard`,
+`DecisionCard`, `BudgetCategoryCard`, `BudgetSummary`, `Indicator`). None
+of these contain game rules — they read `GamePrototypeState` and dispatch
+actions. See `docs/GAMEPLAY_M2.md` for the full screen flow, the
+prototype-vs-real-engine split, and the RNG-safety design
+(`game/country-run/prototype/rng.ts`) that keeps this reducer pure and
+safe under React's `<StrictMode>`.
 
 ## Conventions
 
@@ -256,8 +274,9 @@ presentational component factored out for reuse; it contains no game logic.
   or performance overhead for something the type system and tests already
   cover well enough at this scale.
 - **No business logic in React components.** Components read from and
-  dispatch to the engine; they do not implement game rules. `App.tsx` and
-  `StatCard.tsx` contain zero decisions about game mechanics.
+  dispatch to the engine; they do not implement game rules. Every screen
+  and component under `app/` contains zero decisions about game
+  mechanics — those live in `gameReducer.ts` and `game/country-run/`.
 - **No scattered magic numbers.** The calendar constant (2 months per
   turn, 6 turns/year) lives in `engine/state/calendar.ts`, the single
   place both the turn engine and the Economic Engine's annualization
@@ -268,24 +287,31 @@ presentational component factored out for reuse; it contains no game logic.
   explicit extensions on relative imports; this repo uses them consistently
   rather than mixing conventions.
 
-## What is explicitly out of M0/M1
+## What is explicitly out of scope
 
-Per the Product Bible and the M0/M1 briefs, none of the following exist
+Per the Product Bible and the M0/M1/M2 briefs, none of the following exist
 yet, on purpose:
 
-- Budget Builder UI (the Economic Engine that would power it exists as of
-  M1 — see docs/ECONOMIC_ENGINE.md — but there is no player-facing budget
-  screen).
-- Any Year 1 content: decisions, events (e.g. the energy shock), promises,
-  scenario sequencing — `game/country-run/{decisions,events,promises,
-  scenarios}/` are empty, documented placeholders.
-- Campaign / promise selection, government formation, Parliament and
-  negotiation mechanics.
-- Scoring (`engine/scoring/` is an empty, documented placeholder).
-- Analytics, sharing, leaderboards, save/versioning of `GameState`.
-- Any real visual design — the debug shell is intentionally bare.
+- The full 5-year mandate — M2 plays exactly one Year 1, then loops back
+  to replay/new-game.
+- The full campaign/promise system (the player doesn't choose 5 promises;
+  the Bercy audit references a fixed "~35 Md€" narrative figure instead),
+  government formation, a real Parliament simulation ("modèle
+  parlementaire exhaustif"), ministers, or an advisors system.
+- A validated (non-prototype) popularity model — Product Bible §11's
+  demographic-subgroup popularity is out of scope; M2's popularity is a
+  single documented heuristic number (`game/country-run/prototype/popularity.ts`).
+- A validated (non-prototype) scoring/ending-title system
+  (`game/country-run/prototype/scoring.ts`) — `engine/scoring/` remains an
+  empty, documented placeholder; the real scoring logic, if ever
+  generalized, does not belong there without further validation.
+- Analytics, authentication, a database, save/versioning of `GameState`
+  across sessions, or multiplayer.
+- Real leaderboards or monetization.
 - The real, sourced France 2027 dataset — `game/country-run/data/
-  initialState.ts` uses explicitly-labeled fictional placeholder numbers
-  (see that file's top comment and Product Bible §19).
+  initialState.ts` uses explicitly-labeled fictional placeholder numbers,
+  now picked to roughly match an approximate calibration reference (see
+  that file's top comment, docs/ECONOMIC_ENGINE.md's "Calibration
+  Status", and Product Bible §19).
 
-Building any of the above is M1+ work.
+Building any of the above is later-milestone work.
