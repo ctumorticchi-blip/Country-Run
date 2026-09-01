@@ -66,7 +66,8 @@ const CONCESSION_LIST: ConcessionDefinition[] = [
     label: 'Baisse ciblée de la fiscalité des entreprises',
     description: '-3 Md€/an de recettes, pour rallier les blocs favorables aux entreprises.',
     fiscalDeltaPerYear: 3,
-    economicPolicyEffectDelta: { businessTaxImpulse: -3 },
+    // M6 §1 fix: also sets `taxChanges` — see bills.ts's business-tax-cut-bill comment.
+    economicPolicyEffectDelta: { taxChanges: -3, businessTaxImpulse: -3 },
     policyTagDelta: { businessTax: -0.5 },
   },
   {

@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
+import type { RevenueBlockId, SpendingBlockId } from '../game/country-run/finance/financeTypes.ts'
 import { MANDATE_END_TURN } from '../game/country-run/mandate/calendar.ts'
 import { availableReformBills, createInitialGamePrototypeState, gameReducer, type GameAction, type GamePrototypeState } from './gameReducer.ts'
 
 /**
- * M5 §69: 5 strategy scenario tests (SPENDER / AUSTERITY / INVESTOR / TAX
- * CUTTER / BALANCED) — every one must complete a full 30-turn mandate, and
- * the results must meaningfully differ from each other, proving budget and
- * reform choices actually drive divergent 5-year outcomes rather than
- * converging on the same trajectory regardless of what the player does.
+ * M6 §74-76: 6 five-year strategy scenarios (A Strong Consolidation, B
+ * Expansionary, C Productive Investment, D Tax Cutter, E Social Protection,
+ * F Balanced) — every one must complete a full 30-turn mandate, and the
+ * results must diverge meaningfully from each other, proving the M6
+ * finance model (spending AND revenue) actually drives distinct 5-year
+ * fiscal trajectories rather than converging regardless of what the
+ * player does. Supersedes M5's 5-strategy suite (SPENDER/AUSTERITY/
+ * INVESTOR/TAX_CUTTER/BALANCED), which only exercised spending.
  */
 
 function withSeed(state: GamePrototypeState, seed: string): GamePrototypeState {
@@ -55,39 +59,68 @@ function advanceOneTurn(state: GamePrototypeState): GamePrototypeState {
   return s
 }
 
-type BudgetTierId = 'cuts' | 'controlled' | 'maintain' | 'invest' | 'grandPlan' | 'accelerate' | 'reinforce' | 'hospitalPlan' | 'drastic' | 'targeted'
-
 interface Strategy {
   name: string
-  categoryTiers: Partial<Record<'health' | 'education' | 'publicInvestment' | 'defense' | 'housingTerritories' | 'greenTransition' | 'administrationEfficiency', BudgetTierId>>
+  spendingTiers: Partial<Record<SpendingBlockId, string>>
+  revenueTiers: Partial<Record<RevenueBlockId, string>>
   /** Tried once per year, in order — skipped if unavailable (already adopted) or unaffordable. */
   preferredReforms: string[]
 }
 
 const STRATEGIES: Strategy[] = [
   {
-    name: 'SPENDER',
-    categoryTiers: { health: 'hospitalPlan', education: 'invest', publicInvestment: 'grandPlan', housingTerritories: 'invest', greenTransition: 'accelerate' },
-    preferredReforms: ['hospital-plan-bill', 'housing-construction-plan-bill', 'public-investment-plan-bill', 'defense-expansion-bill'],
-  },
-  {
-    name: 'AUSTERITY',
-    categoryTiers: { health: 'cuts', education: 'cuts', publicInvestment: 'cuts', housingTerritories: 'cuts', greenTransition: 'cuts', administrationEfficiency: 'drastic' },
+    name: 'A_STRONG_CONSOLIDATION',
+    spendingTiers: {
+      pensions: 'structural',
+      health: 'efficiencyDrive',
+      solidarity: 'cuts',
+      education: 'controlled',
+      economyInvestment: 'cuts',
+      defense: 'cuts',
+      security: 'cuts',
+      territories: 'cuts',
+      administration: 'deepCuts',
+    },
+    revenueTiers: {},
     preferredReforms: ['public-administration-reform-bill', 'pension-reform-bill'],
   },
   {
-    name: 'INVESTOR',
-    categoryTiers: { publicInvestment: 'grandPlan', greenTransition: 'accelerate' },
+    name: 'B_EXPANSIONARY',
+    spendingTiers: {
+      pensions: 'protectPurchasingPower',
+      health: 'majorRebuild',
+      solidarity: 'majorPlan',
+      education: 'invest',
+      economyInvestment: 'industryInnovation',
+      defense: 'majorIncrease',
+      security: 'majorPlan',
+      territories: 'housingPriority',
+    },
+    revenueTiers: { householdTax: 'targetedCut', businessTax: 'targetedCut' },
+    preferredReforms: ['hospital-plan-bill', 'housing-construction-plan-bill', 'public-investment-plan-bill', 'defense-expansion-bill'],
+  },
+  {
+    name: 'C_PRODUCTIVE_INVESTMENT',
+    spendingTiers: { economyInvestment: 'infrastructure', territories: 'greenPriority', education: 'invest' },
+    revenueTiers: {},
     preferredReforms: ['industry-innovation-plan-bill', 'public-investment-plan-bill', 'energy-transition-bill'],
   },
   {
-    name: 'TAX_CUTTER',
-    categoryTiers: { administrationEfficiency: 'targeted' },
+    name: 'D_TAX_CUTTER',
+    spendingTiers: { administration: 'efficiencyProgram' },
+    revenueTiers: { householdTax: 'majorCut', businessTax: 'majorCut', consumptionTax: 'cut' },
     preferredReforms: ['business-tax-cut-bill', 'household-tax-cut-bill'],
   },
   {
-    name: 'BALANCED',
-    categoryTiers: {},
+    name: 'E_SOCIAL_PROTECTION',
+    spendingTiers: { pensions: 'protectPurchasingPower', solidarity: 'majorPlan', health: 'hospitalPlan' },
+    revenueTiers: { householdTax: 'targetedIncrease', socialContributions: 'targetedIncrease' },
+    preferredReforms: ['hospital-plan-bill'],
+  },
+  {
+    name: 'F_BALANCED',
+    spendingTiers: { health: 'controlSpending', pensions: 'limitIndexation' },
+    revenueTiers: { consumptionTax: 'targetedIncrease' },
     preferredReforms: ['labor-market-reform-bill'],
   },
 ]
@@ -96,8 +129,11 @@ function playScenario(strategy: Strategy, seed: string): GamePrototypeState {
   let s = campaignThrough(seed)
   for (let year = 1; year <= 5; year++) {
     if (s.screen === 'bercyAudit') s = gameReducer(s, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    for (const [category, tierId] of Object.entries(strategy.categoryTiers)) {
-      s = gameReducer(s, { type: 'SET_BUDGET_TIER', category: category as never, tierId })
+    for (const [blockId, tierId] of Object.entries(strategy.spendingTiers)) {
+      s = gameReducer(s, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: blockId as SpendingBlockId, tierId: tierId })
+    }
+    for (const [blockId, tierId] of Object.entries(strategy.revenueTiers)) {
+      s = gameReducer(s, { type: 'SET_FINANCE_TIER', kind: 'revenue', blockId: blockId as RevenueBlockId, tierId: tierId })
     }
     s = gameReducer(s, { type: 'SUBMIT_BUDGET' })
     s = resolveActiveBillToTerminal(s)
@@ -123,7 +159,7 @@ function playScenario(strategy: Strategy, seed: string): GamePrototypeState {
   return s
 }
 
-describe('5 strategy scenario tests (M5 §69)', () => {
+describe('6 strategy scenario tests (M6 §74-76)', () => {
   const results = STRATEGIES.map((strategy) => ({ strategy, state: playScenario(strategy, `scenario-${strategy.name}`) }))
 
   it('every strategy completes the full 30-turn mandate and reaches mandateReview', () => {
@@ -135,7 +171,7 @@ describe('5 strategy scenario tests (M5 §69)', () => {
     }
   })
 
-  it('every strategy produces a finite, in-bounds final economic state — no NaN/Infinity, no absurd values', () => {
+  it('every strategy produces a finite, in-bounds final economic state — no NaN/Infinity, and stays within the M6 §76 plausibility gates', () => {
     for (const { strategy, state } of results) {
       for (const [key, value] of Object.entries(state.gameState.economic)) {
         expect(Number.isFinite(value), `${strategy.name}.${key} should be finite`).toBe(true)
@@ -143,7 +179,13 @@ describe('5 strategy scenario tests (M5 §69)', () => {
       expect(state.gameState.political.popularity).toBeGreaterThanOrEqual(0)
       expect(state.gameState.political.popularity).toBeLessThanOrEqual(100)
       expect(state.gameState.economic.debtRatio).toBeGreaterThan(0)
-      expect(state.gameState.economic.debtRatio).toBeLessThan(400) // generous plausibility ceiling, not a precise forecast
+      expect(state.gameState.economic.debtRatio).toBeLessThan(220) // M6 §76: reject deliberately-extreme-free scenarios above ~180-220%
+      expect(state.gameState.economic.deficitRatio).toBeLessThan(20)
+      expect(state.gameState.economic.unemployment).toBeGreaterThanOrEqual(0)
+      for (const value of Object.values(state.serviceIndices)) {
+        expect(value).toBeGreaterThan(40)
+        expect(value).toBeLessThan(160)
+      }
     }
   })
 
@@ -156,28 +198,33 @@ describe('5 strategy scenario tests (M5 §69)', () => {
     }
   })
 
-  it('SPENDER and AUSTERITY produce meaningfully different debt trajectories', () => {
-    const spender = results.find((r) => r.strategy.name === 'SPENDER')?.state
-    const austerity = results.find((r) => r.strategy.name === 'AUSTERITY')?.state
-    expect(spender).toBeDefined()
-    expect(austerity).toBeDefined()
-    if (!spender || !austerity) return
-    expect(spender.gameState.economic.debtRatio).not.toBeCloseTo(austerity.gameState.economic.debtRatio, 0)
+  it('A_STRONG_CONSOLIDATION improves the deficit vs. B_EXPANSIONARY, and B_EXPANSIONARY produces the highest debt ratio of all 6', () => {
+    const consolidation = results.find((r) => r.strategy.name === 'A_STRONG_CONSOLIDATION')?.state
+    const expansionary = results.find((r) => r.strategy.name === 'B_EXPANSIONARY')?.state
+    expect(consolidation).toBeDefined()
+    expect(expansionary).toBeDefined()
+    if (!consolidation || !expansionary) return
+    expect(consolidation.gameState.economic.debtRatio).toBeLessThan(expansionary.gameState.economic.debtRatio)
+    const maxDebtRatio = Math.max(...results.map((r) => r.state.gameState.economic.debtRatio))
+    expect(expansionary.gameState.economic.debtRatio).toBe(maxDebtRatio)
   })
 
-  it('the 5 strategies do not all converge on the exact same final score or ending title', () => {
+  it('the 6 strategies do not all converge on the exact same final score, ending title, or debt ratio', () => {
     const scores = results.map((r) => r.state.finalScoreBreakdown?.total)
     const titles = results.map((r) => r.state.endingTitle)
+    const debtRatios = results.map((r) => Number(r.state.gameState.economic.debtRatio.toFixed(1)))
     expect(new Set(scores).size).toBeGreaterThan(1)
     expect(new Set(titles).size).toBeGreaterThan(1)
+    expect(new Set(debtRatios).size).toBeGreaterThan(3)
   })
 
-  it('SPENDER enacts a higher total public-investment-relevant budget stance than AUSTERITY by mandate end', () => {
-    const spender = results.find((r) => r.strategy.name === 'SPENDER')?.state
-    const austerity = results.find((r) => r.strategy.name === 'AUSTERITY')?.state
-    expect(spender).toBeDefined()
-    expect(austerity).toBeDefined()
-    if (!spender || !austerity) return
-    expect(spender.budgetLevels.publicInvestment).toBeGreaterThan(austerity.budgetLevels.publicInvestment)
+  it('D_TAX_CUTTER ends with materially lower public revenue (% GDP) than E_SOCIAL_PROTECTION', () => {
+    const taxCutter = results.find((r) => r.strategy.name === 'D_TAX_CUTTER')?.state
+    const socialProtection = results.find((r) => r.strategy.name === 'E_SOCIAL_PROTECTION')?.state
+    expect(taxCutter).toBeDefined()
+    expect(socialProtection).toBeDefined()
+    if (!taxCutter || !socialProtection) return
+    const revenueRatio = (s: GamePrototypeState) => (s.gameState.economic.publicRevenue / s.gameState.economic.nominalGdp) * 100
+    expect(revenueRatio(taxCutter)).toBeLessThan(revenueRatio(socialProtection))
   })
 })

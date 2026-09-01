@@ -1,4 +1,12 @@
-import { evaluatePolicyCommitment, evaluateThreshold, evaluateUnavailableLever } from './promiseEvaluators.ts'
+import { compositeServiceIndex } from '../finance/serviceIndices.ts'
+import {
+  evaluateNoTaxIncrease,
+  evaluatePensionProtection,
+  evaluatePolicyCommitment,
+  evaluateServiceIndexCommitment,
+  evaluateTaxCutCommitment,
+  evaluateThreshold,
+} from './promiseEvaluators.ts'
 import type { PromiseDefinition } from './promiseTypes.ts'
 
 const pct = (value: number) => `${value.toFixed(1)}%`
@@ -18,16 +26,16 @@ const index = (value: number) => value.toFixed(1)
  * KEPT/BROKEN, until the game actually reaches their deadline turn in a
  * future milestone.
  *
- * A few promises (`energyTransition`, `buildHousing`, `restorePublicServices`)
- * use a documented TEMPORARY evaluator (M3 §8 explicitly allows this for
- * "restaurer les services publics") because the current gameplay has no
- * dedicated lever for them yet — they piggyback on the closest existing
- * lever (public investment, or a composite of health/education choices)
- * rather than faking a purpose-built one. Three tax-related promises
- * (`noTaxIncrease`, `cutHouseholdTaxes`, `cutBusinessTaxes`) and
- * `protectPensions` have NO lever at all yet in M2/M3's gameplay (no
- * decision currently changes taxes or pensions) — their evaluator is
- * honest about that rather than resolving to a fake KEPT/BROKEN.
+ * Two promises (`energyTransition`, `buildHousing`) still piggyback on the
+ * generic `investment` policyHistory category (M3 §8's documented TEMPORARY
+ * evaluator allowance) rather than a purpose-built lever — a deliberate M6
+ * scope decision (see docs/ECONOMY_BUDGET_M6.md's "known limitations").
+ * Every other promise this file once flagged `temporaryEvaluator` —
+ * `noTaxIncrease`, `cutHouseholdTaxes`, `cutBusinessTaxes`, `protectPensions`,
+ * `restorePublicServices` — was rewired in M6 onto real levers: the 4
+ * revenue blocks, the pensions spending block, and the composite service
+ * index (see `finance/`), evaluated against the actual `policyHistory`
+ * `gameReducer.ts` now records for every finance decision.
  */
 export const PROMISE_CATALOG: PromiseDefinition[] = [
   {
@@ -197,9 +205,14 @@ export const PROMISE_CATALOG: PromiseDefinition[] = [
     estimatedAnnualCost: 8,
     difficulty: 'MEDIUM',
     politicalTags: ['taxCut'],
-    temporaryEvaluator: true,
-    evaluate: () =>
-      evaluateUnavailableLever('Aucune mesure fiscale ménages n’est encore disponible dans cette version du jeu.'),
+    evaluate: (ctx) =>
+      evaluateTaxCutCommitment({
+        currentTurn: ctx.currentTurn,
+        deadlineTurn: 30,
+        policyHistory: ctx.policyHistory,
+        sourceIdPrefixes: ['budget:householdTax:', 'household-tax-cut-bill'],
+        minCutAmount: 6,
+      }),
   },
   {
     id: 'cut-business-taxes',
@@ -213,9 +226,14 @@ export const PROMISE_CATALOG: PromiseDefinition[] = [
     estimatedAnnualCost: 6,
     difficulty: 'MEDIUM',
     politicalTags: ['taxCut', 'investment'],
-    temporaryEvaluator: true,
-    evaluate: () =>
-      evaluateUnavailableLever('Aucune mesure fiscale entreprises n’est encore disponible dans cette version du jeu.'),
+    evaluate: (ctx) =>
+      evaluateTaxCutCommitment({
+        currentTurn: ctx.currentTurn,
+        deadlineTurn: 30,
+        policyHistory: ctx.policyHistory,
+        sourceIdPrefixes: ['budget:businessTax:', 'business-tax-cut-bill'],
+        minCutAmount: 5,
+      }),
   },
   {
     id: 'strengthen-defense',
@@ -298,9 +316,7 @@ export const PROMISE_CATALOG: PromiseDefinition[] = [
     estimatedAnnualCost: 0,
     difficulty: 'HIGH',
     politicalTags: ['taxCut', 'fiscalDiscipline'],
-    temporaryEvaluator: true,
-    evaluate: () =>
-      evaluateUnavailableLever('Aucune décision de ce jeu n’augmente encore les impôts — engagement non testable pour l’instant.'),
+    evaluate: (ctx) => evaluateNoTaxIncrease({ currentTurn: ctx.currentTurn, deadlineTurn: 30, policyHistory: ctx.policyHistory }),
   },
   {
     id: 'protect-pensions',
@@ -314,8 +330,7 @@ export const PROMISE_CATALOG: PromiseDefinition[] = [
     estimatedAnnualCost: 0,
     difficulty: 'MEDIUM',
     politicalTags: ['socialProtection'],
-    temporaryEvaluator: true,
-    evaluate: () => evaluateUnavailableLever('Aucune décision de ce jeu ne touche encore les retraites — engagement non testable pour l’instant.'),
+    evaluate: (ctx) => evaluatePensionProtection({ currentTurn: ctx.currentTurn, deadlineTurn: 30, policyHistory: ctx.policyHistory }),
   },
   {
     id: 'restore-public-services',
@@ -329,21 +344,12 @@ export const PROMISE_CATALOG: PromiseDefinition[] = [
     estimatedAnnualCost: 0,
     difficulty: 'MEDIUM',
     politicalTags: ['socialProtection'],
-    temporaryEvaluator: true,
-    evaluate: (ctx) => {
-      // TEMPORARY (M3 §8, explicitly allowed): a composite proxy from health/education choices,
-      // until a dedicated "public services quality" indicator exists.
-      const investedInServices = ctx.policyHistory.some(
-        (entry) => (entry.category === 'health' || entry.category === 'education') && (entry.amount ?? 0) > 0,
-      )
-      const cutServices = ctx.policyHistory.some(
-        (entry) => (entry.category === 'health' || entry.category === 'education') && (entry.amount ?? 0) < 0,
-      )
-      if (ctx.currentTurn === 0) return { status: 'NOT_STARTED', progressLabel: 'Composite santé + éducation' }
-      if (investedInServices && !cutServices) return { status: 'ON_TRACK', progressLabel: 'Moyens renforcés (santé/éducation)' }
-      if (cutServices && !investedInServices) return { status: 'AT_RISK', progressLabel: 'Moyens réduits (santé/éducation)' }
-      return { status: 'IN_PROGRESS', progressLabel: 'Trajectoire mixte' }
-    },
+    evaluate: (ctx) =>
+      evaluateServiceIndexCommitment({
+        currentTurn: ctx.currentTurn,
+        deadlineTurn: 18,
+        compositeIndex: compositeServiceIndex(ctx.serviceIndices),
+      }),
   },
 ]
 

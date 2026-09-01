@@ -53,7 +53,8 @@ export const BILL_CATALOG: PoliticalBillDefinition[] = [
     title: 'BAISSE DE LA FISCALITÉ DES ENTREPRISES',
     description: 'Réduire la fiscalité pesant sur les entreprises pour soutenir l’investissement.',
     policyTags: { businessTax: -0.8, fiscalDiscipline: -0.2 },
-    economicPolicyEffect: { businessTaxImpulse: -6 },
+    // M6 §1 fix: also sets `taxChanges` (the field `computePublicRevenue` actually reads) — before M6 this bill only touched confidence/inflation, never public revenue.
+    economicPolicyEffect: { taxChanges: -6, businessTaxImpulse: -6 },
     fiscalCost: 6,
     reformIntensity: 0.4,
     controversy: 0.35,
@@ -87,7 +88,8 @@ export const BILL_CATALOG: PoliticalBillDefinition[] = [
     title: 'BAISSE DE LA FISCALITÉ DES MÉNAGES',
     description: 'Réduire l’impôt qui pèse sur le travail et les ménages.',
     policyTags: { householdTax: -0.8, publicSpending: -0.1 },
-    economicPolicyEffect: { householdTaxImpulse: -6 },
+    // M6 §1 fix: also sets `taxChanges` — see the business-tax-cut-bill comment above.
+    economicPolicyEffect: { taxChanges: -6, householdTaxImpulse: -6 },
     fiscalCost: 6,
     reformIntensity: 0.3,
     controversy: 0.3,
@@ -189,7 +191,8 @@ export const BILL_CATALOG: PoliticalBillDefinition[] = [
     title: 'PLAN INDUSTRIE ET INNOVATION',
     description: 'Co-investir dans l’industrie et l’innovation technologique.',
     policyTags: { publicInvestment: 0.8, businessTax: -0.2 },
-    economicPolicyEffect: { researchInvestment: 8, businessTaxImpulse: -2 },
+    // M6 §1 fix: also sets `taxChanges` for the businessTaxImpulse component — see the business-tax-cut-bill comment above.
+    economicPolicyEffect: { researchInvestment: 8, taxChanges: -2, businessTaxImpulse: -2 },
     fiscalCost: 10,
     reformIntensity: 0.4,
     controversy: 0.2,

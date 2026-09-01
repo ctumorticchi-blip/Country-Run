@@ -58,7 +58,7 @@ function campaignThrough(seed: string): GamePrototypeState {
 function runBudgetCycleAndOneTurn(state: GamePrototypeState): GamePrototypeState {
   let s = state
   if (s.screen === 'bercyAudit') s = gameReducer(s, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-  s = gameReducer(s, { type: 'SET_BUDGET_TIER', category: 'health', tierId: 'hospitalPlan' })
+  s = gameReducer(s, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: 'health', tierId: 'hospitalPlan' })
   s = gameReducer(s, { type: 'SUBMIT_BUDGET' })
   s = resolveActiveBillToTerminal(s)
   s = gameReducer(s, { type: 'PROCEED_TO_REFORM_HUB' })

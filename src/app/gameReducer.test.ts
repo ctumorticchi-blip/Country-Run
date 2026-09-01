@@ -48,10 +48,10 @@ function runBudgetCycle(state: GamePrototypeState, stance: 'invest' | 'cut' | 'm
   if (s.screen === 'bercyAudit') {
     s = gameReducer(s, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
   }
-  const tier = stance === 'invest' ? 'hospitalPlan' : stance === 'cut' ? 'cuts' : 'maintain'
+  const tier = stance === 'invest' ? 'hospitalPlan' : stance === 'cut' ? 'efficiencyDrive' : 'maintain'
   const eduTier = stance === 'invest' ? 'invest' : stance === 'cut' ? 'cuts' : 'maintain'
-  s = gameReducer(s, { type: 'SET_BUDGET_TIER', category: 'health', tierId: tier })
-  s = gameReducer(s, { type: 'SET_BUDGET_TIER', category: 'education', tierId: eduTier })
+  s = gameReducer(s, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: 'health', tierId: tier })
+  s = gameReducer(s, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: 'education', tierId: eduTier })
   s = gameReducer(s, { type: 'SUBMIT_BUDGET' })
   s = resolveActiveBillToTerminal(s)
   s = gameReducer(s, { type: 'PROCEED_TO_REFORM_HUB' })
@@ -114,13 +114,13 @@ describe('gameReducer — screen transitions through the M5 mandate pipeline', (
     expect(state.activeBill?.status).toBe('NEGOTIATING')
   })
 
-  it('SET_BUDGET_TIER never touches the economic simulation, only the draft selection', () => {
+  it('SET_FINANCE_TIER never touches the economic simulation, only the draft selection', () => {
     let state = campaignThrough('draft-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
     const turnBefore = state.gameState.meta.turn
-    state = gameReducer(state, { type: 'SET_BUDGET_TIER', category: 'publicInvestment', tierId: 'grandPlan' })
+    state = gameReducer(state, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: 'economyInvestment', tierId: 'infrastructure' })
     expect(state.gameState.meta.turn).toBe(turnBefore)
-    expect(state.draftBudgetSelections.publicInvestment).toBe('grandPlan')
+    expect(state.draftFinanceSelections.spending.economyInvestment).toBe('infrastructure')
   })
 
   it('a resolved budget bill commits its levels and moves through reformHub to mandateTurn on skip', () => {
@@ -128,7 +128,7 @@ describe('gameReducer — screen transitions through the M5 mandate pipeline', (
     // A full year (6 ADVANCE_TURN calls) always ends on yearReview.
     expect(state.screen).toBe('yearReview')
     expect(state.gameState.meta.turn).toBe(6)
-    expect(state.budgetLevels.health).not.toBe(0)
+    expect(state.financeLevels.spending.health).toBe('hospitalPlan')
   })
 })
 
@@ -243,11 +243,11 @@ describe('gameReducer — the per-turn mandate loop (M5 §5, §38)', () => {
   it('a kept (unchanged) budget stance across two years contributes zero marginal delta the second year (M1.5 anti-regression)', () => {
     let state = campaignThrough('kept-budget-check')
     state = runBudgetCycle(state, 'maintain', null)
-    const levelsAfterYear1 = state.budgetLevels
+    const levelsAfterYear1 = state.financeLevels
     for (let i = 0; i < 6; i++) state = advanceOneTurn(state)
     state = gameReducer(state, { type: 'CONTINUE_FROM_YEAR_REVIEW' })
     state = runBudgetCycle(state, 'maintain', null) // same neutral stance again
-    expect(state.budgetLevels).toEqual(levelsAfterYear1)
+    expect(state.financeLevels).toEqual(levelsAfterYear1)
   })
 })
 

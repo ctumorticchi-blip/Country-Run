@@ -46,3 +46,29 @@ const MONTH_LABELS_FR = [
 export function formatPeriod(year: number, month: number): string {
   return `${MONTH_LABELS_FR[month - 1] ?? ''} ${String(year)}`
 }
+
+/**
+ * M6 §60: proper French locale formatting (comma decimal, space thousands
+ * separator — e.g. "1 590 Md€", "5,2 %") for the new finance UI. Kept
+ * separate from the plain `.toFixed()`-based helpers above, which the
+ * existing M0-M5 screens keep using unchanged (a documented scope decision
+ * — see docs/ECONOMY_BUDGET_M6.md's "known limitations": unifying every
+ * screen's number formatting was out of scope for this milestone).
+ */
+export function formatMdFr(value: number, decimals = 0): string {
+  return `${value.toLocaleString('fr-FR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })} Md€`
+}
+
+export function formatSignedMdFr(value: number, decimals = 0): string {
+  const sign = value >= 0 ? '+' : ''
+  return `${sign}${formatMdFr(value, decimals)}`
+}
+
+export function formatPercentFr(value: number, decimals = 1): string {
+  return `${value.toLocaleString('fr-FR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })} %`
+}
+
+export function formatSignedPercentFr(value: number, decimals = 1): string {
+  const sign = value >= 0 ? '+' : ''
+  return `${sign}${formatPercentFr(value, decimals)}`
+}

@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { createInitialGameState } from '../data/initialState.ts'
+import { NEUTRAL_SERVICE_INDICES } from '../finance/financeTypes.ts'
 import { appendPolicyHistory, type PolicyHistoryEntry } from '../prototype/policyHistory.ts'
 import { getPromiseDefinition, PROMISE_CATALOG } from './promiseCatalog.ts'
 import type { PromiseEvaluationContext } from './promiseTypes.ts'
 
 const gameState = createInitialGameState('catalog-test-seed')
 
-function contextAt(currentTurn: number, policyHistory: readonly PolicyHistoryEntry[] = []): PromiseEvaluationContext {
-  return { initialEconomic: gameState.economic, currentEconomic: gameState.economic, currentTurn, policyHistory }
+function contextAt(currentTurn: number, policyHistory: readonly PolicyHistoryEntry[] = [], serviceIndices = NEUTRAL_SERVICE_INDICES): PromiseEvaluationContext {
+  return { initialEconomic: gameState.economic, currentEconomic: gameState.economic, currentTurn, policyHistory, serviceIndices }
 }
 
 describe('PROMISE_CATALOG — content shape', () => {
@@ -23,17 +24,9 @@ describe('PROMISE_CATALOG — content shape', () => {
     expect(() => getPromiseDefinition('not-a-real-promise')).toThrow()
   })
 
-  it('every promise with a trackable lever starts NOT_STARTED at turn 0', () => {
-    // The 4 "no lever exists yet" promises (evaluateUnavailableLever) are honestly IN_PROGRESS at every
-    // turn including 0 — there is nothing to "not start" when nothing can be tracked at all (see
-    // promiseEvaluators.ts's evaluateUnavailableLever doc comment).
-    const noLeverIds = new Set(['cut-household-taxes', 'cut-business-taxes', 'no-tax-increase', 'protect-pensions'])
+  it('every promise starts NOT_STARTED at turn 0 — M6 rewired every promise onto a real lever', () => {
     for (const promise of PROMISE_CATALOG) {
-      if (noLeverIds.has(promise.id)) {
-        expect(promise.evaluate(contextAt(0)).status).toBe('IN_PROGRESS')
-      } else {
-        expect(promise.evaluate(contextAt(0)).status).toBe('NOT_STARTED')
-      }
+      expect(promise.evaluate(contextAt(0)).status, promise.id).toBe('NOT_STARTED')
     }
   })
 })
@@ -42,14 +35,14 @@ describe('promise evaluators — correctness', () => {
   it('evaluateThreshold (reduce-deficit) reports ON_TRACK once the metric moves toward target before the deadline', () => {
     const promise = getPromiseDefinition('reduce-deficit')
     const improved = { ...gameState.economic, deficitRatio: gameState.economic.deficitRatio - 0.5 }
-    const evaluation = promise.evaluate({ initialEconomic: gameState.economic, currentEconomic: improved, currentTurn: 3, policyHistory: [] })
+    const evaluation = promise.evaluate({ initialEconomic: gameState.economic, currentEconomic: improved, currentTurn: 3, policyHistory: [], serviceIndices: NEUTRAL_SERVICE_INDICES })
     expect(evaluation.status).toBe('ON_TRACK')
   })
 
   it('evaluateThreshold (reduce-deficit) reports BROKEN if the target is missed by the deadline', () => {
     const promise = getPromiseDefinition('reduce-deficit')
     const worse = { ...gameState.economic, deficitRatio: gameState.economic.deficitRatio + 1 }
-    const evaluation = promise.evaluate({ initialEconomic: gameState.economic, currentEconomic: worse, currentTurn: 18, policyHistory: [] })
+    const evaluation = promise.evaluate({ initialEconomic: gameState.economic, currentEconomic: worse, currentTurn: 18, policyHistory: [], serviceIndices: NEUTRAL_SERVICE_INDICES })
     expect(evaluation.status).toBe('BROKEN')
   })
 
@@ -66,19 +59,45 @@ describe('promise evaluators — correctness', () => {
     expect(evaluation.status).toBe('AT_RISK')
   })
 
-  it('evaluateUnavailableLever promises (e.g. protect-pensions) never resolve to KEPT or BROKEN', () => {
+  it('protect-pensions reports KEPT if pensions were never cut, BROKEN if they were (M6 §49)', () => {
     const promise = getPromiseDefinition('protect-pensions')
-    for (const turn of [0, 1, 6, 12, 30]) {
-      const status = promise.evaluate(contextAt(turn)).status
-      expect(status).not.toBe('KEPT')
-      expect(status).not.toBe('BROKEN')
-    }
+    expect(promise.evaluate(contextAt(30, [])).status).toBe('KEPT')
+    const cutHistory: PolicyHistoryEntry[] = [{ turn: 6, sourceId: 'budget:pensions:Budget 2028', label: 'Retraites — Réforme ciblée', category: 'pensions', amount: -12 }]
+    expect(promise.evaluate(contextAt(30, cutHistory)).status).toBe('BROKEN')
   })
 
-  it('temporary evaluators are all explicitly flagged', () => {
-    const temporaryIds = ['cut-household-taxes', 'cut-business-taxes', 'energy-transition', 'build-housing', 'no-tax-increase', 'protect-pensions', 'restore-public-services']
-    for (const id of temporaryIds) {
-      expect(getPromiseDefinition(id).temporaryEvaluator).toBe(true)
+  it('no-tax-increase is a ratchet: an increase later reversed still counts as BROKEN (M6 §48)', () => {
+    const promise = getPromiseDefinition('no-tax-increase')
+    const raisedThenCut: PolicyHistoryEntry[] = [
+      { turn: 6, sourceId: 'budget:householdTax:Budget 2028', label: 'Fiscalité des ménages — hausse', category: 'taxation', amount: 6 },
+      { turn: 12, sourceId: 'budget:householdTax:Budget 2029', label: 'Fiscalité des ménages — baisse', category: 'taxation', amount: -6 },
+    ]
+    expect(promise.evaluate(contextAt(30, raisedThenCut)).status).toBe('BROKEN')
+    expect(promise.evaluate(contextAt(30, [])).status).toBe('KEPT')
+  })
+
+  it('cut-household-taxes and cut-business-taxes report KEPT once a sufficient cut is adopted', () => {
+    const household = getPromiseDefinition('cut-household-taxes')
+    const business = getPromiseDefinition('cut-business-taxes')
+    const householdCut: PolicyHistoryEntry[] = [{ turn: 6, sourceId: 'budget:householdTax:Budget 2028', label: '', category: 'taxation', amount: -6 }]
+    const businessCut: PolicyHistoryEntry[] = [{ turn: 6, sourceId: 'budget:businessTax:Budget 2028', label: '', category: 'taxation', amount: -5 }]
+    expect(household.evaluate(contextAt(30, householdCut)).status).toBe('KEPT')
+    expect(business.evaluate(contextAt(30, businessCut)).status).toBe('KEPT')
+    expect(household.evaluate(contextAt(30, [])).status).toBe('BROKEN')
+  })
+
+  it('restore-public-services reads the composite service index, not a health/education proxy', () => {
+    const promise = getPromiseDefinition('restore-public-services')
+    const improved = { health: 106, education: 104, security: 103, administration: 102 }
+    expect(promise.evaluate(contextAt(18, [], improved)).status).toBe('KEPT')
+    const degraded = { health: 92, education: 94, security: 96, administration: 95 }
+    expect(promise.evaluate(contextAt(18, [], degraded)).status).toBe('BROKEN')
+  })
+
+  it('temporary evaluators are limited to the 2 promises still sharing the generic investment lever', () => {
+    const temporaryIds = ['energy-transition', 'build-housing']
+    for (const promise of PROMISE_CATALOG) {
+      expect(promise.temporaryEvaluator ?? false, promise.id).toBe(temporaryIds.includes(promise.id))
     }
   })
 })

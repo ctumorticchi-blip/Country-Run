@@ -56,6 +56,8 @@ export interface EventChoice {
   /** blocId -> relationship delta. */
   blocRelationshipEffects?: Partial<Record<string, number>>
   delayedEffects?: EventDelayedEffect[]
+  /** M6 §39: when set, `economicPolicyEffect` is reversed automatically, exactly once, `durationTurns` after it takes effect (see `finance/fiscalLedger.ts`'s expiration mechanism) — a genuinely TEMPORARY measure rather than a sustained level. */
+  temporaryPolicy?: { durationTurns: number }
   /** Shown right after the player picks this choice — never invented narrative, only a plain-language echo of the effects above. */
   immediateFeedback: string
   riskDescription?: string

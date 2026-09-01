@@ -117,6 +117,74 @@ export function explainInflationChange(previous: number, next: number, diagnosti
   }
 }
 
+/**
+ * M6 §42: "why did the deficit change?" — real drivers only (M6's explicit
+ * warning: "no invented drivers"). Structural = this turn's recorded
+ * policy decisions (budget/reform/event); cyclical = the engine's own
+ * `revenueSurprise` (growth-driven, `engine/economy/fiscal.ts`); the debt
+ * interest channel is called out separately since it is never a player
+ * choice.
+ */
+export function explainDeficitChange(
+  previous: number,
+  next: number,
+  diagnostics: EconomicDiagnostics,
+  policyHistory: readonly PolicyHistoryEntry[],
+  turn: Turn,
+): EconomicChangeExplanation {
+  const policyDrivers = policyDriversThisTurn(policyHistory, turn)
+  const otherDrivers: string[] = []
+  if (Math.abs(diagnostics.revenueSurprise) > 0.5) {
+    otherDrivers.push(diagnostics.revenueSurprise > 0 ? 'Recettes meilleures que prévu (conjoncture)' : 'Recettes moins bonnes que prévu (conjoncture)')
+  }
+  if (Math.abs(diagnostics.interestRateChange) > 0.01) {
+    otherDrivers.push(diagnostics.interestRateChange > 0 ? 'Hausse du coût de la dette' : 'Baisse du coût de la dette')
+  }
+  const primaryDrivers = [...policyDrivers, ...otherDrivers].slice(0, 2)
+  const secondaryDrivers = [...policyDrivers, ...otherDrivers].slice(2)
+  const confidence: 'HIGH' | 'MEDIUM' | 'LOW' = policyDrivers.length > 0 ? 'MEDIUM' : otherDrivers.length > 0 ? 'LOW' : 'LOW'
+  return { indicator: 'deficit', previousValue: previous, newValue: next, primaryDrivers, secondaryDrivers, confidence }
+}
+
+/** M6 §43: "why did debt change?" — the 3 real drivers of the debt-dynamics identity (`engine/economy/debt.ts`): the fiscal (primary) deficit, the interest burden, and nominal GDP growth (the denominator effect — growth alone can lower the RATIO even if the euro amount rises). */
+export function explainDebtChange(previousRatio: number, nextRatio: number, deficitRatio: number, nominalGrowth: number, interestRateChange: number): EconomicChangeExplanation {
+  const drivers: string[] = []
+  if (deficitRatio > 0.5) drivers.push(`Déficit primaire (${deficitRatio.toFixed(1)}% du PIB)`)
+  if (nominalGrowth > 0.5) drivers.push('Croissance nominale du PIB (effet dénominateur, atténue la dette en % du PIB)')
+  if (Math.abs(interestRateChange) > 0.01) drivers.push(interestRateChange > 0 ? 'Charge de la dette en hausse' : 'Charge de la dette en baisse')
+  return {
+    indicator: 'debt',
+    previousValue: previousRatio,
+    newValue: nextRatio,
+    primaryDrivers: drivers.slice(0, 2),
+    secondaryDrivers: drivers.slice(2),
+    confidence: drivers.length > 0 ? 'MEDIUM' : 'LOW',
+  }
+}
+
+/** M6 §44: "why did purchasing power change?" — inflation, household taxation/transfers (both already folded into `computePurchasingPower`, M1.5), and this turn's own recorded decisions (a budget line, an event choice). */
+export function explainPurchasingPowerChange(
+  previous: number,
+  next: number,
+  inflation: number,
+  policyHistory: readonly PolicyHistoryEntry[],
+  turn: Turn,
+): EconomicChangeExplanation {
+  const policyDrivers = policyDriversThisTurn(policyHistory, turn)
+  const drivers: string[] = []
+  if (inflation > 2.5) drivers.push('Inflation élevée')
+  else if (inflation < 1) drivers.push('Inflation faible')
+  drivers.push(...policyDrivers)
+  return {
+    indicator: 'purchasingPower',
+    previousValue: previous,
+    newValue: next,
+    primaryDrivers: drivers.slice(0, 2),
+    secondaryDrivers: drivers.slice(2),
+    confidence: policyDrivers.length > 0 ? 'MEDIUM' : drivers.length > 0 ? 'LOW' : 'LOW',
+  }
+}
+
 /** Unemployment has no direct diagnostics breakdown — explained via any labor-market policy recorded this turn, plus a link to growth's own leading driver when growth actually moved. */
 export function explainUnemploymentChange(
   previous: number,

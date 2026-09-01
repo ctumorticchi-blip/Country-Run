@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import type { EconomicState } from '../../engine/state/gameState.ts'
+import { computePrimaryBalance } from '../../game/country-run/finance/primaryBalance.ts'
 import type { EndingTitle, FinalScoreBreakdown } from '../../game/country-run/mandate/finalScoring.ts'
 import { getPromiseDefinition } from '../../game/country-run/promises/promiseCatalog.ts'
 import type { PromiseResolution } from '../../game/country-run/promises/promiseResolution.ts'
-import { formatPercent, purchasingPowerIndex } from '../format.ts'
+import { formatMdFr, formatPercent, purchasingPowerIndex } from '../format.ts'
 
 interface MandateReviewScreenProps {
   initialEconomic: EconomicState
@@ -62,6 +63,8 @@ export function MandateReviewScreen({
   onNewGame,
 }: MandateReviewScreenProps) {
   const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'shared'>('idle')
+  const initialPrimaryBalance = computePrimaryBalance(initialEconomic)
+  const finalPrimaryBalance = computePrimaryBalance(finalEconomic)
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(
@@ -108,6 +111,16 @@ export function MandateReviewScreen({
             purchasingPowerIndex(finalEconomic.purchasingPower).toFixed(1),
           )}
           {reportRow('Popularité', `${initialPopularity.toFixed(0)}%`, `${finalPopularity.toFixed(0)}%`)}
+        </div>
+
+        <div className="cr-card">
+          <p className="cr-eyebrow">Finances publiques — 2027 → 2032</p>
+          {reportRow('Recettes publiques', formatMdFr(initialEconomic.publicRevenue), formatMdFr(finalEconomic.publicRevenue))}
+          {reportRow('Dépenses publiques (dont charge de la dette)', formatMdFr(initialEconomic.publicSpending), formatMdFr(finalEconomic.publicSpending))}
+          {reportRow('Charge de la dette', formatMdFr(initialEconomic.interestCost), formatMdFr(finalEconomic.interestCost))}
+          {reportRow('Solde primaire (hors charge de la dette)', formatMdFr(initialPrimaryBalance.primaryBalanceBn), formatMdFr(finalPrimaryBalance.primaryBalanceBn))}
+          {reportRow('Déficit', formatPercent(initialEconomic.deficitRatio), formatPercent(finalEconomic.deficitRatio))}
+          {reportRow('Dette publique', formatPercent(initialEconomic.debtRatio, 1), formatPercent(finalEconomic.debtRatio, 1))}
         </div>
 
         <div className="cr-card">

@@ -1,5 +1,6 @@
 import type { Turn } from '../../../engine/state/gameState.ts'
 import type { EconomicState } from '../../../engine/state/gameState.ts'
+import type { ServiceIndices } from '../finance/financeTypes.ts'
 import type { PolicyHistoryEntry } from '../prototype/policyHistory.ts'
 
 /** Product Bible-neutral category labels (M3 §7) — never left/right. */
@@ -46,6 +47,8 @@ export interface PromiseEvaluationContext {
   currentEconomic: EconomicState
   currentTurn: Turn
   policyHistory: readonly PolicyHistoryEntry[]
+  /** M6 §45-50: the current service-quality indices — `restore-public-services` is the only promise reading these. */
+  serviceIndices: ServiceIndices
 }
 
 export interface PromiseEvaluation {

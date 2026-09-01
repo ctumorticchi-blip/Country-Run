@@ -2,9 +2,18 @@ import { DEFAULT_ECONOMIC_ENGINE_CONFIG } from '../engine/economy/config/default
 import { applyEffect } from '../engine/effects/apply.ts'
 import { NEUTRAL_POLICY_INPUT, type EconomicPolicyInput, type WorldState } from '../engine/economy/types.ts'
 import type { EconomicState, GameState } from '../engine/state/gameState.ts'
-import { BUDGET_CATEGORIES, BUDGET_CATEGORY_ORDER, getTier, NEUTRAL_BUDGET_LEVELS, NEUTRAL_BUDGET_SELECTIONS, selectionsFromLevels } from '../game/country-run/budget/budgetCategories.ts'
-import { budgetLevelsToPolicyInput, selectionsToLevels } from '../game/country-run/budget/budgetEffects.ts'
-import type { BudgetCategoryId, BudgetLevels, BudgetSelections } from '../game/country-run/budget/budgetTypes.ts'
+import {
+  computeFinanceChanges,
+  diffPolicyEffect,
+  NEUTRAL_FINANCE_LEVELS,
+  policyHistoryEntriesFromFinanceChanges,
+  scheduleFinanceChanges,
+  type FinanceBlockChange,
+} from '../game/country-run/finance/financeEffects.ts'
+import { dueLedgerExpirations, expirationPolicyEffect, ledgerEntriesFromFinanceChanges, ledgerEntryFromSource } from '../game/country-run/finance/fiscalLedger.ts'
+import { NEUTRAL_SERVICE_INDICES, type FiscalLedgerEntry, type RevenueBlockId, type ServiceIndices, type SpendingBlockId } from '../game/country-run/finance/financeTypes.ts'
+import { driftServiceIndices } from '../game/country-run/finance/serviceIndices.ts'
+import { getSpendingTier } from '../game/country-run/finance/spendingBlocks.ts'
 import { createInitialGameState } from '../game/country-run/data/initialState.ts'
 import { createInitialWorldState } from '../game/country-run/data/initialWorldState.ts'
 import { budgetLabelForYearStartTurn } from '../game/country-run/mandate/calendar.ts'
@@ -39,6 +48,7 @@ import {
   MAX_CAPITAL_SPEND_PER_ACTION,
   spendCapital,
 } from '../game/country-run/prototype/politicalCapital.ts'
+import { mergePolicyDeltas } from '../game/country-run/prototype/yearOneFlow.ts'
 import type { DecisionConfig, PlayerChoices, ScreenId } from '../game/country-run/prototype/types.ts'
 import {
   applyPopularityResilience,
@@ -65,10 +75,10 @@ import { resolveVote, type VoteResult } from '../game/country-run/parliament/vot
 import { PROMISE_CATALOG } from '../game/country-run/promises/promiseCatalog.ts'
 import { resolveDuePromises, type PromiseResolution } from '../game/country-run/promises/promiseResolution.ts'
 import { coherenceScore, isCompleteSelection, REQUIRED_PROMISE_COUNT } from '../game/country-run/promises/promiseSelection.ts'
-import type { PromiseCategory, PromiseEvaluationContext } from '../game/country-run/promises/promiseTypes.ts'
+import type { PromiseEvaluationContext } from '../game/country-run/promises/promiseTypes.ts'
 
-/** Bumped whenever the serialized shape of `GamePrototypeState` changes; no migration logic exists yet — an incompatible save fails safely to a new game (see save.ts). */
-export const GAME_VERSION = '0.5.0'
+/** Bumped whenever the serialized shape of `GamePrototypeState` changes; no migration logic exists yet — an incompatible save fails safely to a new game (see save.ts). M6 bumps this: the whole finance layer (`budgetLevels`/`draftBudgetSelections` -> `financeLevels`/`draftFinanceSelections`, plus new `fiscalLedger`/`serviceIndices` fields) is a breaking shape change. */
+export const GAME_VERSION = '0.6.0'
 
 /** Flat capital cost of a single SEEK_SUPPORT outreach action (M4 §12) — cheap relative to a full concession, so courting stays a real but minor lever. */
 export const SEEK_SUPPORT_CAPITAL_COST = 2
@@ -91,6 +101,11 @@ export function generateSeed(): string {
 /** Same one-off-timestamp rationale as `generateSeed` — only called from the non-deterministic state-construction helpers below, never from inside a mid-run action handler. */
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+export interface FinanceSelectionState {
+  spending: Record<SpendingBlockId, string>
+  revenue: Record<RevenueBlockId, string>
 }
 
 /**
@@ -126,23 +141,34 @@ export interface GamePrototypeState {
 
   /** Set once from the Bercy audit choice (M5 §11 keeps this the one fixed pre-mandate decision) — never changes again. */
   bercyPolicyEffect: Partial<EconomicPolicyInput>
-  /** Accumulates permanently as scheduled bill/event implementations mature (M5 §38) — the ONLY mandate policy component stored as a running total; see turnController.ts's header for why that's safe. */
+  /** Accumulates permanently as scheduled bill/event/budget-block implementations mature (M5 §38, extended M6 to every finance block) — the ONLY mandate policy component stored as a running total; see turnController.ts's header for why that's safe. */
   implementedReformPolicies: Partial<EconomicPolicyInput>
   scheduledImplementations: ScheduledImplementation[]
   /**
    * The FULL merged policy actually fed to the engine on the last-played
    * turn — MUST be threaded, never re-derived (see
    * `turnController.ts`'s `BeginMandateTurnInput.previousMergedPolicy` doc
-   * comment): re-deriving it fresh from the current `budgetLevels` etc.
-   * would make a just-adopted budget invisible to the engine's own
-   * `computePolicyDelta`, the exact M1.5 bug class this field exists to
-   * avoid. `NEUTRAL_POLICY_INPUT` before the mandate's first turn.
+   * comment): re-deriving it fresh from current state would make a
+   * just-adopted budget invisible to the engine's own `computePolicyDelta`,
+   * the exact M1.5 bug class this field exists to avoid.
+   * `NEUTRAL_POLICY_INPUT` before the mandate's first turn.
    */
   lastMergedPolicyInput: EconomicPolicyInput
-  /** The PERSISTENT absolute budget stance (M5 §29) — re-derived to a policy input fresh every turn, never stored as one. */
-  budgetLevels: BudgetLevels
-  /** The in-progress Budget Builder draft (tier ids) — resets each budget cycle from `selectionsFromLevels(budgetLevels)`. */
-  draftBudgetSelections: BudgetSelections
+  /**
+   * M6 §7-8: the PERSISTENT enacted tier id per spending/revenue block —
+   * replaces M5's `BudgetLevels` (a bare Md€ number per category). Unlike
+   * M5, this is DISPLAY/reconciliation state only: the actual policy
+   * contribution is threaded through `implementedReformPolicies` exactly
+   * like a reform bill (see `finance/financeEffects.ts`'s module doc), not
+   * re-derived from this every turn.
+   */
+  financeLevels: FinanceSelectionState
+  /** The in-progress Budget Builder draft (tier ids) — resets each budget cycle from `financeLevels`. */
+  draftFinanceSelections: FinanceSelectionState
+  /** M6 §40-41: the explainability ledger — see `finance/fiscalLedger.ts`. */
+  fiscalLedger: FiscalLedgerEntry[]
+  /** M6 §45-46: health/education/security/administration service-quality indices. */
+  serviceIndices: ServiceIndices
   /** Set when a budget cycle opens (e.g. "Budget 2028") — `null` only before the mandate's first cycle. */
   currentBudgetLabel: string | null
   /** ids of events already resolved this run — event eligibility never repeats a one-shot event (M5 §24). */
@@ -175,7 +201,8 @@ export type GameAction =
   | { type: 'PROCEED_TO_MANDATE_START' }
   | { type: 'BEGIN_MANDATE' }
   | { type: 'CHOOSE_BERCY'; choiceId: string }
-  | { type: 'SET_BUDGET_TIER'; category: BudgetCategoryId; tierId: string }
+  | { type: 'SET_FINANCE_TIER'; kind: 'spending'; blockId: SpendingBlockId; tierId: string }
+  | { type: 'SET_FINANCE_TIER'; kind: 'revenue'; blockId: RevenueBlockId; tierId: string }
   | { type: 'SUBMIT_BUDGET' }
   | { type: 'NEGOTIATE_SEEK_SUPPORT'; blocId: string }
   | { type: 'NEGOTIATE_OFFER_CONCESSION'; concessionId: ConcessionType }
@@ -201,21 +228,16 @@ function findDecisionChoice(decision: DecisionConfig, choiceId: string) {
   return choice
 }
 
-/** Maps each of the 7 M5 budget categories to the promise category its spending counts toward (M3 §24, extended M5 §30). */
-const BUDGET_CATEGORY_TO_PROMISE_CATEGORY: Record<BudgetCategoryId, PromiseCategory> = {
-  health: 'health',
-  education: 'education',
-  publicInvestment: 'investment',
-  defense: 'security',
-  housingTerritories: 'housing',
-  greenTransition: 'environment',
-  administrationEfficiency: 'publicServices',
-}
-
 /** Resolves a bill id to its definition — the Budget Bill is derived live from the current Budget Builder draft; every other id is a static `BILL_CATALOG` entry (M4 §21, §30). */
 export function resolveBillDefinition(state: GamePrototypeState, billId: string): PoliticalBillDefinition {
   if (billId === BUDGET_BILL_ID) {
-    return deriveBudgetBill(selectionsToLevels(state.draftBudgetSelections), state.budgetLevels, state.currentBudgetLabel ?? 'Budget')
+    const changes = computeFinanceChanges(
+      state.draftFinanceSelections.spending,
+      state.financeLevels.spending,
+      state.draftFinanceSelections.revenue,
+      state.financeLevels.revenue,
+    )
+    return deriveBudgetBill(changes, state.currentBudgetLabel ?? 'Budget')
   }
   return getBillDefinition(billId)
 }
@@ -272,8 +294,10 @@ function freshRunState(
     implementedReformPolicies: {},
     scheduledImplementations: [],
     lastMergedPolicyInput: { ...NEUTRAL_POLICY_INPUT },
-    budgetLevels: { ...NEUTRAL_BUDGET_LEVELS },
-    draftBudgetSelections: { ...NEUTRAL_BUDGET_SELECTIONS },
+    financeLevels: { spending: { ...NEUTRAL_FINANCE_LEVELS.spending }, revenue: { ...NEUTRAL_FINANCE_LEVELS.revenue } },
+    draftFinanceSelections: { spending: { ...NEUTRAL_FINANCE_LEVELS.spending }, revenue: { ...NEUTRAL_FINANCE_LEVELS.revenue } },
+    fiscalLedger: [],
+    serviceIndices: { ...NEUTRAL_SERVICE_INDICES },
     currentBudgetLabel: null,
     firedEventIds: [],
     activeEventId: null,
@@ -392,28 +416,30 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
         bercyPolicyEffect: choice.policyDelta ?? {},
         policyHistory: appendPolicyHistory(state.policyHistory, entry),
         currentBudgetLabel: budgetLabelForYearStartTurn(state.gameState.meta.turn + 1),
-        draftBudgetSelections: selectionsFromLevels(state.budgetLevels),
+        draftFinanceSelections: { spending: { ...state.financeLevels.spending }, revenue: { ...state.financeLevels.revenue } },
         popularityAtYearStart: gameState.political.popularity,
       }
     }
 
-    case 'SET_BUDGET_TIER':
+    case 'SET_FINANCE_TIER': {
       if (state.screen !== 'budgetBuilder') return state
-      return { ...state, draftBudgetSelections: { ...state.draftBudgetSelections, [action.category]: action.tierId } }
+      if (action.kind === 'spending') {
+        return {
+          ...state,
+          draftFinanceSelections: { ...state.draftFinanceSelections, spending: { ...state.draftFinanceSelections.spending, [action.blockId]: action.tierId } },
+        }
+      }
+      return {
+        ...state,
+        draftFinanceSelections: { ...state.draftFinanceSelections, revenue: { ...state.draftFinanceSelections.revenue, [action.blockId]: action.tierId } },
+      }
+    }
 
     case 'SUBMIT_BUDGET': {
+      // M6 fix over M5: policyHistory/scheduling/ledger are built on ADOPTION (resolveBillVote /
+      // resolveExceptionalProcedure), never here — a REJECTED budget must never satisfy or break
+      // a promise, or leave a ledger entry for a fiscal effect that never actually took hold.
       if (state.screen !== 'budgetBuilder') return state
-      const newLevels = selectionsToLevels(state.draftBudgetSelections)
-      const entries: PolicyHistoryEntry[] = BUDGET_CATEGORY_ORDER.filter((id) => newLevels[id] !== state.budgetLevels[id]).map((categoryId) => {
-        const tier = getTier(categoryId, state.draftBudgetSelections[categoryId])
-        return {
-          turn: state.gameState.meta.turn + 1,
-          sourceId: `budget:${categoryId}:${state.currentBudgetLabel ?? ''}`,
-          label: `${state.currentBudgetLabel ?? 'Budget'} — ${BUDGET_CATEGORIES[categoryId].label} — ${tier.label}`,
-          category: BUDGET_CATEGORY_TO_PROMISE_CATEGORY[categoryId],
-          amount: newLevels[categoryId],
-        }
-      })
       const activeBill: ActiveBillState = {
         billId: BUDGET_BILL_ID,
         status: 'NEGOTIATING',
@@ -423,13 +449,7 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
         turnProposed: state.gameState.meta.turn,
         voteAttempts: 0,
       }
-      return {
-        ...state,
-        screen: 'billNegotiation',
-        activeBill,
-        lastVoteResult: null,
-        policyHistory: entries.reduce(appendPolicyHistory, state.policyHistory),
-      }
+      return { ...state, screen: 'billNegotiation', activeBill, lastVoteResult: null }
     }
 
     case 'NEGOTIATE_SEEK_SUPPORT': {
@@ -555,7 +575,7 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
         ...state,
         screen: 'budgetBuilder',
         currentBudgetLabel: budgetLabelForYearStartTurn(nextYearStartTurn),
-        draftBudgetSelections: selectionsFromLevels(state.budgetLevels),
+        draftFinanceSelections: { spending: { ...state.financeLevels.spending }, revenue: { ...state.financeLevels.revenue } },
         popularityAtYearStart: state.gameState.political.popularity,
       }
     }
@@ -623,6 +643,61 @@ function updateRelationsAndDeals(
   return { blocRelations: nextRelations, politicalDeals: nextDeals }
 }
 
+/** M6 §53: the Budget Bill's adoption path — schedules every changed block at its OWN implementationTiming, folds in any concessions granted (fixing the M5-era gap where a budget-bill concession's fiscal effect was silently dropped), and records the ledger/policyHistory entries used by promise evaluators and the "NOTE DE BERCY" explainability views. Shared by `resolveBillVote` and `resolveExceptionalProcedure` (a budget bill forced through exceptional procedure is adopted exactly the same way). */
+function applyAdoptedBudget(
+  state: GamePrototypeState,
+  effectiveBill: EffectiveBill,
+  definition: PoliticalBillDefinition,
+): {
+  financeLevels: FinanceSelectionState
+  scheduledImplementations: ScheduledImplementation[]
+  fiscalLedger: FiscalLedgerEntry[]
+  policyHistory: PolicyHistoryEntry[]
+} {
+  const budgetLabel = state.currentBudgetLabel ?? 'Budget'
+  const nextYearStartTurn = state.gameState.meta.turn + 1
+  const changes: FinanceBlockChange[] = computeFinanceChanges(
+    state.draftFinanceSelections.spending,
+    state.financeLevels.spending,
+    state.draftFinanceSelections.revenue,
+    state.financeLevels.revenue,
+  )
+
+  const scheduledFromChanges = scheduleFinanceChanges(changes, state.gameState.meta.turn, nextYearStartTurn, budgetLabel)
+  const ledgerFromChanges = ledgerEntriesFromFinanceChanges(changes, nextYearStartTurn, budgetLabel)
+  const historyFromChanges = policyHistoryEntriesFromFinanceChanges(changes, nextYearStartTurn, budgetLabel)
+
+  // M6 §53 fix: a granted concession's fiscal effect (definition + concessions, minus the definition
+  // alone) is scheduled and ledgered exactly once — before M6 this was computed for the vote but never
+  // actually folded into any persistent policy component for the BUDGET bill specifically.
+  const concessionEffect = diffPolicyEffect(effectiveBill.economicPolicyEffect, definition.economicPolicyEffect)
+  const hasConcessionEffect = Object.keys(concessionEffect).length > 0
+  const concessionSourceId = `budget-concession:${budgetLabel}`
+  const scheduledFromConcessions: ScheduledImplementation[] = hasConcessionEffect
+    ? [{ sourceId: concessionSourceId, label: `${budgetLabel} — concessions accordées`, adoptedTurn: state.gameState.meta.turn, scheduledTurn: nextYearStartTurn, policyEffect: concessionEffect }]
+    : []
+  const ledgerFromConcessions: FiscalLedgerEntry[] = hasConcessionEffect
+    ? [
+        ledgerEntryFromSource({
+          sourceId: concessionSourceId,
+          label: `${budgetLabel} — concessions accordées`,
+          annualAmount: effectiveBill.fiscalCost - definition.fiscalCost,
+          startTurn: nextYearStartTurn,
+          category: concessionEffect.taxChanges !== undefined ? 'REVENUE' : 'SPENDING',
+          originType: 'CONCESSION',
+          policyEffect: concessionEffect,
+        }),
+      ]
+    : []
+
+  return {
+    financeLevels: { spending: { ...state.draftFinanceSelections.spending }, revenue: { ...state.draftFinanceSelections.revenue } },
+    scheduledImplementations: [...state.scheduledImplementations, ...scheduledFromChanges, ...scheduledFromConcessions],
+    fiscalLedger: [...state.fiscalLedger, ...ledgerFromChanges, ...ledgerFromConcessions],
+    policyHistory: historyFromChanges.reduce(appendPolicyHistory, state.policyHistory),
+  }
+}
+
 function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
   if (!state.activeBill || !state.parliamentComposition || !state.choices.governmentProfileId) return state
   const modifiers: GovernmentModifiers = getGovernmentProfile(state.choices.governmentProfileId).modifiers
@@ -676,20 +751,41 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     tensionDeltaFromCompromise(state.activeBill.appliedConcessionIds.length, voteResult.passed)
 
   const isBudgetBill = state.activeBill.billId === BUDGET_BILL_ID
-  let budgetLevels = state.budgetLevels
+  let financeLevels = state.financeLevels
   let scheduledImplementations = state.scheduledImplementations
+  let fiscalLedger = state.fiscalLedger
+  let policyHistory = state.policyHistory
+
   if (isBudgetBill && status === 'ADOPTED') {
-    budgetLevels = selectionsToLevels(state.draftBudgetSelections)
+    const applied = applyAdoptedBudget(state, effectiveBill, definition)
+    financeLevels = applied.financeLevels
+    scheduledImplementations = applied.scheduledImplementations
+    fiscalLedger = applied.fiscalLedger
+    policyHistory = applied.policyHistory
   }
   if (!isBudgetBill && status === 'ADOPTED') {
     const nextYearStartTurn = state.gameState.meta.turn + 1
+    const scheduledTurn = nextYearStartTurn + definition.implementationDelay
+    const policyEffect = scalePartialPolicy(effectiveBill.economicPolicyEffect, modifiers)
     scheduledImplementations = scheduleImplementation(scheduledImplementations, {
       sourceId: definition.id,
       label: definition.title,
       adoptedTurn: nextYearStartTurn,
-      scheduledTurn: nextYearStartTurn + definition.implementationDelay,
-      policyEffect: scalePartialPolicy(effectiveBill.economicPolicyEffect, modifiers),
+      scheduledTurn,
+      policyEffect,
     })
+    fiscalLedger = [
+      ...fiscalLedger,
+      ledgerEntryFromSource({
+        sourceId: definition.id,
+        label: definition.title,
+        annualAmount: effectiveBill.fiscalCost,
+        startTurn: scheduledTurn,
+        category: policyEffect.taxChanges !== undefined ? 'REVENUE' : 'SPENDING',
+        originType: 'REFORM',
+        policyEffect,
+      }),
+    ]
   }
 
   const capitalDelta = status === 'ADOPTED' ? Math.round(2 + effectiveBill.definition.reformIntensity * 3) : -Math.round(4 + effectiveBill.definition.controversy * 6)
@@ -715,8 +811,10 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     governmentTension: applyTensionDelta(state.governmentTension, tensionDelta),
     blocRelations,
     politicalDeals,
-    budgetLevels,
+    financeLevels,
     scheduledImplementations,
+    fiscalLedger,
+    policyHistory,
     lastVoteResult: voteResult,
     billHistory: [...state.billHistory, historyEntry],
     activeBill: null,
@@ -747,19 +845,40 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
   const gameState = nudgePoliticalWithGovernment(state.gameState, procedureResult.popularityDelta, state.choices.governmentProfileId)
 
   const isBudgetBill = state.activeBill.billId === BUDGET_BILL_ID
-  let budgetLevels = state.budgetLevels
+  let financeLevels = state.financeLevels
   let scheduledImplementations = state.scheduledImplementations
+  let fiscalLedger = state.fiscalLedger
+  let policyHistory = state.policyHistory
+
   if (isBudgetBill) {
-    budgetLevels = selectionsToLevels(state.draftBudgetSelections)
+    const applied = applyAdoptedBudget(state, effectiveBill, definition)
+    financeLevels = applied.financeLevels
+    scheduledImplementations = applied.scheduledImplementations
+    fiscalLedger = applied.fiscalLedger
+    policyHistory = applied.policyHistory
   } else {
     const nextYearStartTurn = state.gameState.meta.turn + 1
+    const scheduledTurn = nextYearStartTurn + definition.implementationDelay
+    const policyEffect = scalePartialPolicy(effectiveBill.economicPolicyEffect, modifiers)
     scheduledImplementations = scheduleImplementation(scheduledImplementations, {
       sourceId: definition.id,
       label: definition.title,
       adoptedTurn: nextYearStartTurn,
-      scheduledTurn: nextYearStartTurn + definition.implementationDelay,
-      policyEffect: scalePartialPolicy(effectiveBill.economicPolicyEffect, modifiers),
+      scheduledTurn,
+      policyEffect,
     })
+    fiscalLedger = [
+      ...fiscalLedger,
+      ledgerEntryFromSource({
+        sourceId: definition.id,
+        label: definition.title,
+        annualAmount: effectiveBill.fiscalCost,
+        startTurn: scheduledTurn,
+        category: policyEffect.taxChanges !== undefined ? 'REVENUE' : 'SPENDING',
+        originType: 'REFORM',
+        policyEffect,
+      }),
+    ]
   }
 
   const historyEntry: BillHistoryEntry = {
@@ -782,12 +901,29 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
     politicalCapital: procedureResult.politicalCapitalAfter,
     governmentTension: procedureResult.governmentTensionAfter,
     blocRelations,
-    budgetLevels,
+    financeLevels,
     scheduledImplementations,
+    fiscalLedger,
+    policyHistory,
     lastVoteResult: null,
     billHistory: [...state.billHistory, historyEntry],
     activeBill: null,
     screen: 'billVote',
+  }
+}
+
+/** The current per-block funding signal service indices drift toward (M6 §45) — read from the PERSISTED enacted tier, not the in-progress draft. */
+function serviceIndexInputsFromFinanceLevels(financeLevels: FinanceSelectionState) {
+  const healthTier = getSpendingTier('health', financeLevels.spending.health)
+  const educationTier = getSpendingTier('education', financeLevels.spending.education)
+  const securityTier = getSpendingTier('security', financeLevels.spending.security)
+  const administrationTier = getSpendingTier('administration', financeLevels.spending.administration)
+  return {
+    healthFundingDelta: healthTier.annualFiscalDelta,
+    educationFundingDelta: educationTier.annualFiscalDelta,
+    securityFundingDelta: securityTier.annualFiscalDelta,
+    administrationFundingDelta: administrationTier.annualFiscalDelta,
+    administrationReformLevel: administrationTier.policyEffect.publicSectorReform ?? 0,
   }
 }
 
@@ -796,7 +932,11 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
  * implementations, event roll, promise deadline resolution, popularity
  * drift — everything `mandate/turnController.ts` exposes as pure
  * functions, wired together with this playthrough's actual government
- * modifiers and stored state.
+ * modifiers and stored state. M6 adds: reversing any fiscal-ledger entry
+ * expiring exactly this turn (temporary measures, M6 §39) BEFORE the
+ * engine runs, so the reversal lands the turn it's due — and drifting the
+ * service-quality indices gradually toward this turn's funding signal
+ * (M6 §45).
  */
 function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
   if (state.screen !== 'mandateTurn') return state
@@ -805,11 +945,17 @@ function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
   const modifiers = getGovernmentProfile(governmentProfileId).modifiers
   const engineConfig = deriveGovernmentEngineConfig(DEFAULT_ECONOMIC_ENGINE_CONFIG, modifiers)
 
+  const nextTurn = state.gameState.meta.turn + 1
+  const dueExpirations = dueLedgerExpirations(state.fiscalLedger, nextTurn)
+  const expirationEffect = expirationPolicyEffect(dueExpirations)
+  const implementedReformPoliciesBase =
+    Object.keys(expirationEffect).length > 0 ? mergePolicyDeltas(state.implementedReformPolicies, expirationEffect) : state.implementedReformPolicies
+
   const policyComponents: MandatePolicyComponents = {
     bercyPolicy: scalePartialPolicy(state.bercyPolicyEffect, modifiers),
     energyPolicy: {},
-    enactedBudgetPolicy: scalePartialPolicy(budgetLevelsToPolicyInput(state.budgetLevels), modifiers),
-    implementedReformPolicies: state.implementedReformPolicies,
+    enactedBudgetPolicy: {},
+    implementedReformPolicies: implementedReformPoliciesBase,
   }
 
   const result = beginMandateTurn({
@@ -829,11 +975,14 @@ function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
     events: EVENT_CATALOG,
   })
 
+  const serviceIndices = driftServiceIndices(state.serviceIndices, serviceIndexInputsFromFinanceLevels(state.financeLevels))
+
   const promiseCtx: PromiseEvaluationContext = {
     initialEconomic: state.initialEconomicSnapshot,
     currentEconomic: result.nextState.economic,
     currentTurn: result.nextState.meta.turn,
     policyHistory: state.policyHistory,
+    serviceIndices,
   }
   const newResolutions = resolveDuePromises(PROMISE_CATALOG, state.choices.selectedPromiseIds, state.promiseResolutions, promiseCtx)
   const newlyResolvedThisTurn = newResolutions.filter((r) => !state.promiseResolutions.some((old) => old.promiseId === r.promiseId))
@@ -853,6 +1002,10 @@ function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
     turn: result.nextState.meta.turn,
     sourceId: `${entry.sourceId}:implemented`,
     label: `${entry.label} — mise en œuvre`,
+    // M6: a matured implementation touching `taxChanges`/`transfersChanges` is tax/pension policy —
+    // lets `no-tax-increase`/`protect-pensions`/tax-cut promises see REFORM-bill maturations too, not only budget blocks.
+    category: entry.policyEffect.taxChanges !== undefined ? 'taxation' : entry.policyEffect.transfersChanges !== undefined ? 'pensions' : undefined,
+    amount: entry.policyEffect.taxChanges ?? entry.policyEffect.transfersChanges,
   }))
 
   const nextStateBase: GamePrototypeState = {
@@ -861,6 +1014,8 @@ function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
     implementedReformPolicies: result.policyComponents.implementedReformPolicies,
     lastMergedPolicyInput: result.mergedPolicy,
     scheduledImplementations: [...result.scheduledImplementations],
+    fiscalLedger: state.fiscalLedger,
+    serviceIndices,
     promiseResolutions: newResolutions,
     economicSnapshots,
     policyHistory: implementationHistory.reduce(appendPolicyHistory, state.policyHistory),
@@ -924,6 +1079,24 @@ function resolveEventChoice(state: GamePrototypeState, choiceId: string): GamePr
     amount: choice.fiscalEffect,
   }
 
+  let fiscalLedger = state.fiscalLedger
+  if (scaledChoice.economicPolicyEffect && Object.keys(scaledChoice.economicPolicyEffect).length > 0) {
+    const startTurn = turn + 1
+    fiscalLedger = [
+      ...fiscalLedger,
+      ledgerEntryFromSource({
+        sourceId: `event:${event.id}:${choice.id}`,
+        label: `${event.title} — ${choice.title}`,
+        annualAmount: choice.fiscalEffect ?? 0,
+        startTurn,
+        endTurn: choice.temporaryPolicy ? startTurn + choice.temporaryPolicy.durationTurns : null,
+        category: scaledChoice.economicPolicyEffect.taxChanges !== undefined ? 'REVENUE' : 'SPENDING',
+        originType: 'EVENT',
+        policyEffect: scaledChoice.economicPolicyEffect,
+      }),
+    ]
+  }
+
   return {
     ...state,
     gameState,
@@ -933,6 +1106,7 @@ function resolveEventChoice(state: GamePrototypeState, choiceId: string): GamePr
     blocRelations,
     implementedReformPolicies: policyComponents.implementedReformPolicies,
     scheduledImplementations: [...scheduledImplementations],
+    fiscalLedger,
     policyHistory: appendPolicyHistory(state.policyHistory, entry),
     lastEventChoice: { eventId: event.id, eventTitle: event.title, choiceId: choice.id, immediateFeedback: choice.immediateFeedback },
   }

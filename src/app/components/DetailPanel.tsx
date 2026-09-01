@@ -1,4 +1,6 @@
 import type { EconomicState } from '../../engine/state/gameState.ts'
+import { debtInterestShareOfSpending } from '../../game/country-run/finance/financeEffects.ts'
+import { computePrimaryBalance } from '../../game/country-run/finance/primaryBalance.ts'
 import { formatTurnPeriod } from '../../game/country-run/mandate/calendar.ts'
 import { getRelation, type BlocRelations } from '../../game/country-run/parliament/blocRelations.ts'
 import type { BillHistoryEntry } from '../../game/country-run/parliament/billTypes.ts'
@@ -18,6 +20,7 @@ interface DetailPanelProps {
 }
 
 function EconomyDetail({ economic }: { economic: EconomicState }) {
+  const primaryBalance = computePrimaryBalance(economic)
   return (
     <div className="cr-indicator-grid">
       {[
@@ -26,6 +29,8 @@ function EconomyDetail({ economic }: { economic: EconomicState }) {
         ['Inflation', formatPercent(economic.inflation)],
         ['Déficit', `${formatPercent(economic.deficitRatio)} PIB`],
         ['Dette', `${formatPercent(economic.debtRatio, 0)} PIB`],
+        ['Solde primaire', `${primaryBalance.primaryBalanceBn.toFixed(0)} Md€`],
+        ['Charge de la dette', `${economic.interestCost.toFixed(0)} Md€ (${debtInterestShareOfSpending(economic).toFixed(1)}% des dépenses)`],
         ['Pouvoir d’achat', purchasingPowerIndex(economic.purchasingPower).toFixed(1)],
         ['Confiance des marchés', `${economic.marketConfidence.toFixed(0)} / 100`],
         ['Taux d’intérêt effectif', formatPercent(economic.effectiveDebtRate)],
@@ -98,6 +103,7 @@ export function DetailPanel({ tab, state, onClose }: DetailPanelProps) {
     currentEconomic: state.gameState.economic,
     currentTurn: state.gameState.meta.turn,
     policyHistory: state.policyHistory,
+    serviceIndices: state.serviceIndices,
   }
 
   return (

@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useState } from 'react'
 import { bercyAuditText, BERCY_AUDIT } from '../game/country-run/prototype/decisions.ts'
 import { isFiscallyDifficult, totalEstimatedAnnualCost } from '../game/country-run/promises/promiseSelection.ts'
-import type { BudgetCategoryId } from '../game/country-run/budget/budgetTypes.ts'
+import type { RevenueBlockId, SpendingBlockId } from '../game/country-run/finance/financeTypes.ts'
 import type { PromiseEvaluationContext } from '../game/country-run/promises/promiseTypes.ts'
 import { getGovernmentProfile } from '../game/country-run/government/governmentProfiles.ts'
 import { getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
@@ -210,9 +210,11 @@ export function App() {
           <BudgetBuilderScreen
             economic={state.gameState.economic}
             budgetLabel={state.currentBudgetLabel ?? 'Budget'}
-            selections={state.draftBudgetSelections}
-            previousLevels={state.budgetLevels}
-            onChangeTier={(category: BudgetCategoryId, tierId: string) => { dispatch({ type: 'SET_BUDGET_TIER', category, tierId }) }}
+            financeLevels={state.financeLevels}
+            draftSelections={state.draftFinanceSelections}
+            selectedPromiseIds={state.choices.selectedPromiseIds}
+            onChangeSpendingTier={(blockId: SpendingBlockId, tierId: string) => { dispatch({ type: 'SET_FINANCE_TIER', kind: 'spending', blockId, tierId }) }}
+            onChangeRevenueTier={(blockId: RevenueBlockId, tierId: string) => { dispatch({ type: 'SET_FINANCE_TIER', kind: 'revenue', blockId, tierId }) }}
             onSubmit={() => { dispatch({ type: 'SUBMIT_BUDGET' }) }}
           />
           <PromiseTrackerSection state={state} />
@@ -351,6 +353,7 @@ export function App() {
             politicalCapital={state.politicalCapital}
             governmentTension={state.governmentTension}
             scoreBreakdown={state.finalScoreBreakdown}
+            serviceIndices={state.serviceIndices}
             onContinue={() => { dispatch({ type: 'CONTINUE_FROM_YEAR_REVIEW' }) }}
           />
           <PromiseTrackerSection state={state} />
@@ -384,6 +387,7 @@ function PromiseTrackerSection({ state }: { state: GamePrototypeState }) {
     currentEconomic: state.gameState.economic,
     currentTurn: state.gameState.meta.turn,
     policyHistory: state.policyHistory,
+    serviceIndices: state.serviceIndices,
   }
   return (
     <div className="cr-page" style={{ paddingTop: 0 }}>

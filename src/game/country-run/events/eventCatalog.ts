@@ -423,7 +423,8 @@ export const EVENT_CATALOG: EventDefinition[] = [
         title: 'BAISSER LES IMPÔTS',
         description: 'Rendre une partie de la manne aux ménages.',
         fiscalEffect: -3,
-        economicPolicyEffect: { householdTaxImpulse: -3 },
+        // M6 §1 fix: also sets `taxChanges` — see parliament/bills.ts's business-tax-cut-bill comment.
+        economicPolicyEffect: { taxChanges: -3, householdTaxImpulse: -3 },
         popularityEffect: 1,
         immediateFeedback: '-3 Md€/an de recettes rendues aux ménages.',
       },
@@ -459,11 +460,13 @@ export const EVENT_CATALOG: EventDefinition[] = [
       {
         id: 'temporary-tax',
         title: 'MESURE FISCALE TEMPORAIRE',
-        description: 'Une hausse ciblée et temporaire des recettes.',
+        description: 'Une hausse ciblée et temporaire des recettes, pour un an.',
         fiscalEffect: 3,
-        economicPolicyEffect: { householdTaxImpulse: 3 },
+        // M6 §1/§39 fix: also sets `taxChanges`, and is genuinely TEMPORARY — reversed automatically after 6 turns (1 gameplay year), not a sustained tax rise.
+        economicPolicyEffect: { taxChanges: 3, householdTaxImpulse: 3 },
+        temporaryPolicy: { durationTurns: 6 },
         popularityEffect: -2,
-        immediateFeedback: '+3 Md€/an de recettes supplémentaires.',
+        immediateFeedback: '+3 Md€/an de recettes supplémentaires, pour un an.',
       },
     ],
   },

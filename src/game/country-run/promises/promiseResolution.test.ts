@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { createInitialGameState } from '../data/initialState.ts'
+import { NEUTRAL_SERVICE_INDICES } from '../finance/financeTypes.ts'
+import type { PolicyHistoryEntry } from '../prototype/policyHistory.ts'
 import { getPromiseDefinition, PROMISE_CATALOG } from './promiseCatalog.ts'
 import { displayStatusForPromise, resolveDuePromises } from './promiseResolution.ts'
 import type { PromiseEvaluationContext } from './promiseTypes.ts'
 
 const gameState = createInitialGameState('resolution-test-seed')
 
-function contextAt(currentTurn: number, currentEconomic = gameState.economic): PromiseEvaluationContext {
-  return { initialEconomic: gameState.economic, currentEconomic, currentTurn, policyHistory: [] }
+function contextAt(currentTurn: number, currentEconomic = gameState.economic, policyHistory: readonly PolicyHistoryEntry[] = []): PromiseEvaluationContext {
+  return { initialEconomic: gameState.economic, currentEconomic, currentTurn, policyHistory, serviceIndices: NEUTRAL_SERVICE_INDICES }
 }
 
 describe('resolveDuePromises (M5 §15-16)', () => {
@@ -51,8 +53,8 @@ describe('resolveDuePromises (M5 §15-16)', () => {
     expect(second[0]).toEqual(first[0])
   })
 
-  it('a temporaryEvaluator promise (e.g. protect-pensions) resolves to PARTIAL, never KEPT/BROKEN', () => {
-    const promise = getPromiseDefinition('protect-pensions')
+  it('a temporaryEvaluator promise (e.g. energy-transition) never resolves to BROKEN when undelivered — PARTIAL instead (honest about the shared lever)', () => {
+    const promise = getPromiseDefinition('energy-transition')
     const resolutions = resolveDuePromises([promise], [promise.id], [], contextAt(promise.deadlineTurn))
     expect(resolutions).toHaveLength(1)
     expect(resolutions[0].finalStatus).toBe('PARTIAL')

@@ -1,21 +1,50 @@
-import { BUDGET_CATEGORIES, BUDGET_CATEGORY_ORDER } from '../../game/country-run/budget/budgetCategories.ts'
-import { estimateBudgetImpact, selectionsToLevels } from '../../game/country-run/budget/budgetEffects.ts'
-import type { BudgetCategoryId, BudgetLevels, BudgetSelections } from '../../game/country-run/budget/budgetTypes.ts'
+import { useMemo } from 'react'
+import { computeFinanceChanges } from '../../game/country-run/finance/financeEffects.ts'
+import type { RevenueBlockId, SpendingBlockId } from '../../game/country-run/finance/financeTypes.ts'
+import { REVENUE_BLOCK_ORDER, REVENUE_BLOCKS } from '../../game/country-run/finance/revenueBlocks.ts'
+import { SPENDING_BLOCK_ORDER, SPENDING_BLOCKS } from '../../game/country-run/finance/spendingBlocks.ts'
 import type { EconomicState } from '../../engine/state/gameState.ts'
-import { BudgetCategoryCard } from '../components/BudgetCategoryCard.tsx'
+import { FinanceBlockCard } from '../components/FinanceBlockCard.tsx'
 import { BudgetSummary } from '../components/BudgetSummary.tsx'
+import { formatMdFr } from '../format.ts'
+import type { FinanceSelectionState } from '../gameReducer.ts'
 
 interface BudgetBuilderScreenProps {
   economic: EconomicState
   budgetLabel: string
-  selections: BudgetSelections
-  previousLevels: BudgetLevels
-  onChangeTier: (category: BudgetCategoryId, tierId: string) => void
+  financeLevels: FinanceSelectionState
+  draftSelections: FinanceSelectionState
+  selectedPromiseIds: readonly string[]
+  onChangeSpendingTier: (blockId: SpendingBlockId, tierId: string) => void
+  onChangeRevenueTier: (blockId: RevenueBlockId, tierId: string) => void
   onSubmit: () => void
 }
 
-export function BudgetBuilderScreen({ economic, budgetLabel, selections, previousLevels, onChangeTier, onSubmit }: BudgetBuilderScreenProps) {
-  const estimate = estimateBudgetImpact(selectionsToLevels(selections), previousLevels, economic.gdp)
+const GLOSSARY: [string, string][] = [
+  ['PIB', 'Produit intérieur brut — la richesse totale produite par le pays en un an.'],
+  ['Déficit', 'Ce que l’État dépense en plus de ce qu’il perçoit, sur un an.'],
+  ['Dette', 'La somme cumulée de tous les déficits passés, non remboursés.'],
+  ['Solde primaire', 'Solde avant paiement des intérêts de la dette — ce que le budget "de base" dégage.'],
+  ['Charge de la dette', 'Les intérêts versés chaque année aux créanciers de l’État.'],
+  ['Prélèvements obligatoires', 'Impôts, taxes et cotisations sociales perçus par l’État.'],
+  ['Croissance nominale', 'Croissance du PIB en valeur, avant déduction de l’inflation.'],
+]
+
+/** M6 §60-66: HEADER (macro situation) / REVENUE (4 cards) / SPENDING (9 cards) / DEBT (locked) / sticky NOTE DE BERCY summary — progressive disclosure throughout so the screen stays playable on a 390px phone. */
+export function BudgetBuilderScreen({
+  economic,
+  budgetLabel,
+  financeLevels,
+  draftSelections,
+  selectedPromiseIds,
+  onChangeSpendingTier,
+  onChangeRevenueTier,
+  onSubmit,
+}: BudgetBuilderScreenProps) {
+  const changes = useMemo(
+    () => computeFinanceChanges(draftSelections.spending, financeLevels.spending, draftSelections.revenue, financeLevels.revenue),
+    [draftSelections, financeLevels],
+  )
 
   return (
     <div className="cr-screen">
@@ -28,34 +57,71 @@ export function BudgetBuilderScreen({ economic, budgetLabel, selections, previou
 
         <div className="cr-budget-header">
           <div className="cr-card">
-            <div className="cr-body-text">Recettes projetées</div>
-            <strong>{economic.publicRevenue.toFixed(0)} Md€</strong>
+            <div className="cr-body-text">Recettes actuelles</div>
+            <strong>{formatMdFr(economic.publicRevenue)}</strong>
           </div>
           <div className="cr-card">
-            <div className="cr-body-text">Dépenses projetées</div>
-            <strong>{economic.publicSpending.toFixed(0)} Md€</strong>
+            <div className="cr-body-text">Dépenses actuelles</div>
+            <strong>{formatMdFr(economic.publicSpending)}</strong>
           </div>
           <div className="cr-card">
-            <div className="cr-body-text">Déficit projeté</div>
+            <div className="cr-body-text">Déficit actuel</div>
             <strong>{economic.deficitRatio.toFixed(1)}% du PIB</strong>
+          </div>
+          <div className="cr-card">
+            <div className="cr-body-text">Charge de la dette (verrouillée)</div>
+            <strong>{formatMdFr(economic.interestCost)}</strong>
           </div>
         </div>
 
-        {BUDGET_CATEGORY_ORDER.map((categoryId) => (
-          <BudgetCategoryCard
-            key={categoryId}
-            category={BUDGET_CATEGORIES[categoryId]}
-            tierId={selections[categoryId]}
-            onChange={(tierId) => { onChangeTier(categoryId, tierId) }}
-          />
-        ))}
+        <section>
+          <h2 className="cr-section-title">RECETTES</h2>
+          {REVENUE_BLOCK_ORDER.map((blockId) => (
+            <FinanceBlockCard
+              key={blockId}
+              block={REVENUE_BLOCKS[blockId]}
+              selectedTierId={draftSelections.revenue[blockId]}
+              enactedTierId={financeLevels.revenue[blockId]}
+              onChange={(tierId) => { onChangeRevenueTier(blockId, tierId) }}
+            />
+          ))}
+        </section>
 
-        <BudgetSummary
-          estimate={estimate}
-          projectedRevenue={economic.publicRevenue}
-          projectedSpending={economic.publicSpending}
-          projectedDeficitRatio={economic.deficitRatio}
-        />
+        <section>
+          <h2 className="cr-section-title">DÉPENSES</h2>
+          {SPENDING_BLOCK_ORDER.map((blockId) => (
+            <FinanceBlockCard
+              key={blockId}
+              block={SPENDING_BLOCKS[blockId]}
+              selectedTierId={draftSelections.spending[blockId]}
+              enactedTierId={financeLevels.spending[blockId]}
+              onChange={(tierId) => { onChangeSpendingTier(blockId, tierId) }}
+            />
+          ))}
+          <div className="cr-card cr-finance-block cr-finance-block--locked">
+            <div className="cr-finance-block__head">
+              <strong>Charge de la dette</strong>
+              <span className="cr-body-text">{formatMdFr(economic.interestCost)}/an</span>
+            </div>
+            <p className="cr-budget-category__copy">
+              Calculée automatiquement chaque année à partir du stock de dette et du taux d’intérêt effectif — jamais choisie directement par le président.
+            </p>
+          </div>
+        </section>
+
+        <BudgetSummary economic={economic} changes={changes} selectedPromiseIds={selectedPromiseIds} />
+
+        <details className="cr-glossary">
+          <summary>Glossaire</summary>
+          <dl>
+            {GLOSSARY.map(([term, definition]) => (
+              <div key={term} className="cr-glossary__row">
+                <dt>{term}</dt>
+                <dd>{definition}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
 
         <div className="cr-button-row">
           <button type="button" className="cr-button cr-button--primary" onClick={onSubmit}>

@@ -1,7 +1,10 @@
 import type { EconomicState } from '../../engine/state/gameState.ts'
+import { debtInterestShareOfSpending } from '../../game/country-run/finance/financeEffects.ts'
+import type { ServiceIndices } from '../../game/country-run/finance/financeTypes.ts'
+import { computeDebtStabilization, computePrimaryBalance } from '../../game/country-run/finance/primaryBalance.ts'
 import { turnToGameplayYear } from '../../game/country-run/mandate/calendar.ts'
 import type { FinalScoreBreakdown } from '../../game/country-run/mandate/finalScoring.ts'
-import { formatPercent, purchasingPowerIndex } from '../format.ts'
+import { formatMdFr, formatPercent, formatPercentFr, purchasingPowerIndex } from '../format.ts'
 
 interface YearReviewScreenProps {
   turn: number
@@ -13,7 +16,15 @@ interface YearReviewScreenProps {
   politicalCapital: number
   governmentTension: number
   scoreBreakdown: FinalScoreBreakdown
+  serviceIndices: ServiceIndices
   onContinue: () => void
+}
+
+const SERVICE_INDEX_LABEL: Record<keyof ServiceIndices, string> = {
+  health: 'Santé',
+  education: 'Éducation',
+  security: 'Sécurité',
+  administration: 'Administration',
 }
 
 function reportRow(label: string, from: string, to: string) {
@@ -38,9 +49,12 @@ export function YearReviewScreen({
   politicalCapital,
   governmentTension,
   scoreBreakdown,
+  serviceIndices,
   onContinue,
 }: YearReviewScreenProps) {
   const year = turnToGameplayYear(turn)
+  const primaryBalance = computePrimaryBalance(currentEconomic)
+  const stabilization = computeDebtStabilization(currentEconomic)
   return (
     <div className="cr-screen">
       <div className="cr-page">
@@ -76,6 +90,36 @@ export function YearReviewScreen({
         <div className="cr-report-row">
           <span className="cr-report-row__label">Tension gouvernementale</span>
           <span className="cr-report-row__value">{governmentTension.toFixed(0)} / 100</span>
+        </div>
+
+        <div className="cr-card">
+          <p className="cr-eyebrow">Finances publiques</p>
+          <div className="cr-report-row">
+            <span className="cr-report-row__label">Solde primaire</span>
+            <span className="cr-report-row__value">{formatMdFr(primaryBalance.primaryBalanceBn)}</span>
+          </div>
+          <div className="cr-report-row">
+            <span className="cr-report-row__label">Charge de la dette</span>
+            <span className="cr-report-row__value">
+              {formatMdFr(currentEconomic.interestCost)} ({formatPercentFr(debtInterestShareOfSpending(currentEconomic))} des dépenses)
+            </span>
+          </div>
+          <div className="cr-report-row">
+            <span className="cr-report-row__label">Effort pour stabiliser la dette</span>
+            <span className="cr-report-row__value">{stabilization.gap > 0 ? `${formatPercentFr(stabilization.gap)} PIB` : 'Déjà stabilisée'}</span>
+          </div>
+        </div>
+
+        <div className="cr-card">
+          <p className="cr-eyebrow">Qualité des services publics (indices, 100 = début de mandat)</p>
+          <div className="cr-report-grid">
+            {(Object.keys(SERVICE_INDEX_LABEL) as (keyof ServiceIndices)[]).map((key) => (
+              <div className="cr-report-row" key={key}>
+                <span className="cr-report-row__label">{SERVICE_INDEX_LABEL[key]}</span>
+                <span className="cr-report-row__value">{serviceIndices[key].toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="cr-button-row">
