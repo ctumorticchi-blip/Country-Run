@@ -2,11 +2,13 @@ import type { EconomicPolicyInput, ExternalShock } from '../../../engine/economy
 import type { BudgetSelections } from '../budget/budgetTypes.ts'
 
 /**
- * The full pre-presidency + Year 1 screen sequence (M3 §1-9, extending the
- * M2 vertical slice). `'parliament'` was renamed `'parliamentVote'` to
- * disambiguate it from the new `'parliamentComposition'` screen (the
- * legislative election's seat results) — same Year 1 budget-vote screen as
- * M2, just a clearer name now that Parliament has two distinct screens.
+ * The full pre-presidency + Year 1 screen sequence. M3 (§1-9) added
+ * everything through `budgetBuilder`. M4 (§21, §28, §31) replaces the old
+ * `'parliamentVote'` single negotiate/maintain/concede screen with a
+ * generic negotiation pipeline reused for BOTH the mandatory Budget Bill
+ * and the one discretionary Year 1 reform: `'reformHub'` (choose the
+ * discretionary bill), `'billNegotiation'` (concessions/courting/capital),
+ * `'billVote'` (the resolved vote, for either bill).
  */
 export type ScreenId =
   | 'landing'
@@ -22,7 +24,9 @@ export type ScreenId =
   | 'bercyAudit'
   | 'energyShock'
   | 'budgetBuilder'
-  | 'parliamentVote'
+  | 'billNegotiation'
+  | 'billVote'
+  | 'reformHub'
   | 'yearReport'
 
 export interface DecisionChoicePreview {
@@ -53,22 +57,14 @@ export interface DecisionConfig {
   shock?: ExternalShock
 }
 
-export interface ParliamentChoiceConfig {
-  id: 'negotiate' | 'maintain' | 'concede'
-  title: string
-  copy: string
-  passProbability: number
-  concession: Partial<EconomicPolicyInput>
-  popularityDelta: number
-}
-
-export type ParliamentOutcome = 'adopted' | 'rejected'
-
 /**
  * Accumulated player choices for the run — enough to replay deterministically
  * from the same seed. `selectedPromiseIds` and `governmentProfileId` are the
- * campaign-phase choices (M3 §3, §15); everything else is the Year 1
- * gameplay choices carried over unchanged from M2.
+ * campaign-phase choices (M3 §3, §15); `bercyChoiceId`/`energyChoiceId`/
+ * `budgetSelections` are the Year 1 gameplay choices carried over unchanged
+ * from M2. The old `parliamentChoiceId` (M2's negotiate/maintain/concede
+ * pick) is gone — the Budget Bill's negotiation state now lives in
+ * `GamePrototypeState.activeBill`/`billHistory` (M4 §36).
  */
 export interface PlayerChoices {
   selectedPromiseIds: string[]
@@ -76,5 +72,4 @@ export interface PlayerChoices {
   bercyChoiceId: string | null
   energyChoiceId: string | null
   budgetSelections: BudgetSelections
-  parliamentChoiceId: ParliamentChoiceConfig['id'] | null
 }

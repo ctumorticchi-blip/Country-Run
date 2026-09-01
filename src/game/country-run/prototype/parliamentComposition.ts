@@ -1,5 +1,6 @@
 import type { SeededRng } from '../../../engine/seeded-rng/SeededRng.ts'
 import type { GovernmentModifiers } from '../government/governmentTypes.ts'
+import { OPPOSITION_BLOC_DEFINITIONS } from '../parliament/blocDefinitions.ts'
 import { coherenceScore, dominantTags } from '../promises/promiseSelection.ts'
 import type { PoliticalTag } from '../promises/promiseTypes.ts'
 import { MAX_ELECTION_SCORE_PCT, MIN_ELECTION_SCORE_PCT } from './electionResult.ts'
@@ -7,12 +8,14 @@ import { ABSOLUTE_MAJORITY, TOTAL_SEATS } from './parliament.ts'
 import { createActionRng } from './rng.ts'
 
 /**
- * ⚠️ PROTOTYPE-ONLY LEGISLATIVE ELECTION (M3 §6-7). Entirely fictional
- * blocs — no real French party is named or implied. Distinct from
- * `parliament.ts`'s single pass/fail coin flip (the M2-lite Budget vote
- * mechanic, which this module doesn't replace): this generates the
- * Assembly's actual seat composition once, right after the campaign, which
- * `parliament.ts` then treats as flavor context for the Year 1 budget vote.
+ * ⚠️ PROTOTYPE-ONLY LEGISLATIVE ELECTION (M3 §6-7, bloc list upgraded to
+ * the canonical M4 set in `parliament/blocDefinitions.ts` — §2: "Preserve
+ * the M3 Parliament composition architecture"). Entirely fictional blocs —
+ * no real French party is named or implied. Distinct from
+ * `parliament.ts`'s single pass/fail coin flip (the old M2-lite Budget
+ * vote mechanic, replaced in M4 by `parliament/voteResolution.ts`): this
+ * generates the Assembly's actual seat composition once, right after the
+ * campaign.
  */
 export const PLAYER_SEATS_MIN = 220
 export const PLAYER_SEATS_MAX = 300
@@ -33,13 +36,6 @@ export interface ParliamentComposition {
   majorityOutcome: MajorityOutcome
 }
 
-const OPPOSITION_BLOCS: { id: string; name: string; baseWeight: number; affinityTags: PoliticalTag[] }[] = [
-  { id: 'centre', name: 'Alliance du Centre', baseWeight: 1.0, affinityTags: ['reform'] },
-  { id: 'conservateur', name: 'Bloc Conservateur', baseWeight: 1.0, affinityTags: ['fiscalDiscipline', 'taxCut', 'security'] },
-  { id: 'social', name: 'Rassemblement Social', baseWeight: 1.0, affinityTags: ['socialProtection'] },
-  { id: 'ecologiste', name: 'Mouvement Écologiste', baseWeight: 0.8, affinityTags: ['environment', 'investment'] },
-]
-
 function classifyMajority(playerSeats: number): MajorityOutcome {
   if (playerSeats >= ABSOLUTE_MAJORITY) return 'MAJORITÉ_ABSOLUE'
   if (playerSeats >= 240) return 'MAJORITÉ_RELATIVE'
@@ -56,11 +52,11 @@ function computePlayerSeats(electionScorePct: number, coherence: number, parliam
   return Math.round(Math.min(PLAYER_SEATS_MAX, Math.max(PLAYER_SEATS_MIN, raw)))
 }
 
-/** A bloc sharing an affinity tag with the player's programme sees some of its base drift to the player coalition instead. */
-function blocWeight(bloc: (typeof OPPOSITION_BLOCS)[number], playerDominantTags: readonly PoliticalTag[], rng: SeededRng): number {
-  const overlaps = bloc.affinityTags.some((tag) => playerDominantTags.includes(tag))
+/** A bloc sharing a political tag with the player's programme sees some of its base weight drift to the player coalition instead. */
+function blocWeight(bloc: (typeof OPPOSITION_BLOC_DEFINITIONS)[number], playerDominantTags: readonly PoliticalTag[], rng: SeededRng): number {
+  const overlaps = bloc.politicalTags.some((tag) => playerDominantTags.includes(tag))
   const affinityFactor = overlaps ? 0.8 : 1.15
-  return bloc.baseWeight * affinityFactor * rng.float(0.85, 1.15)
+  return bloc.seatWeight * affinityFactor * rng.float(0.85, 1.15)
 }
 
 /** Distributes `remainder` seats across `weights`'s blocs proportionally, with any rounding remainder going to the largest weights first — deterministic given `weights`. */
@@ -97,22 +93,20 @@ export function generateParliamentComposition(
   const playerDominantTags = dominantTags(selectedPromiseIds)
 
   const playerSeats = computePlayerSeats(electionScorePct, coherence, governmentModifiers.parliamentNegotiation, rng)
-  const nonInscritsSeats = rng.integer(5, 15)
-  const oppositionRemainder = TOTAL_SEATS - playerSeats - nonInscritsSeats
+  const oppositionRemainder = TOTAL_SEATS - playerSeats
 
-  const weights = OPPOSITION_BLOCS.map((bloc) => blocWeight(bloc, playerDominantTags, rng))
+  const weights = OPPOSITION_BLOC_DEFINITIONS.map((bloc) => blocWeight(bloc, playerDominantTags, rng))
   const oppositionSeats = proportionalSplit(oppositionRemainder, weights)
 
   const blocs: ParliamentBloc[] = [
-    { id: 'majorite-presidentielle', name: 'Majorité Présidentielle', seats: playerSeats, isPlayerCoalition: true, affinityTags: playerDominantTags },
-    ...OPPOSITION_BLOCS.map((bloc, i) => ({
+    { id: 'PRESIDENTIAL_BLOC', name: 'Majorité Présidentielle', seats: playerSeats, isPlayerCoalition: true, affinityTags: playerDominantTags },
+    ...OPPOSITION_BLOC_DEFINITIONS.map((bloc, i) => ({
       id: bloc.id,
       name: bloc.name,
       seats: oppositionSeats[i],
       isPlayerCoalition: false,
-      affinityTags: bloc.affinityTags,
+      affinityTags: bloc.politicalTags,
     })),
-    { id: 'non-inscrits', name: 'Non-Inscrits', seats: nonInscritsSeats, isPlayerCoalition: false, affinityTags: [] },
   ]
 
   return { blocs, playerSeats, majorityOutcome: classifyMajority(playerSeats) }

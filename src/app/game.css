@@ -770,3 +770,168 @@
   color: var(--off-white-dim);
   opacity: 0.8;
 }
+
+/* ---------- M4: negotiation / vote / reform hub ---------- */
+
+.cr-button--small {
+  padding: 0.5rem 0.9rem;
+  font-size: 0.78rem;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--navy-600);
+  color: var(--off-white);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  transition: all var(--transition-fast);
+}
+
+.cr-button--small:hover:not(:disabled) {
+  border-color: var(--blue-accent);
+}
+
+.cr-button--small:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cr-vote-estimate {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+@media (min-width: 640px) {
+  .cr-vote-estimate {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.cr-vote-estimate > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cr-vote-estimate__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--off-white-dim);
+}
+
+.cr-vote-estimate__value {
+  font-size: 1.1rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cr-confidence-pill {
+  display: inline-block;
+  margin-top: 0.6rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.cr-confidence-pill--HIGH {
+  background: rgba(62, 201, 139, 0.18);
+  color: var(--green-good);
+}
+
+.cr-confidence-pill--MEDIUM {
+  background: rgba(231, 169, 60, 0.18);
+  color: var(--amber-warn);
+}
+
+.cr-confidence-pill--LOW {
+  background: rgba(224, 69, 90, 0.18);
+  color: var(--red-bad);
+}
+
+.cr-bloc-card-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.7rem;
+}
+
+@media (min-width: 720px) {
+  .cr-bloc-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.cr-bloc-card {
+  background: var(--navy-800);
+  border: 1px solid var(--navy-700);
+  border-radius: var(--radius-lg);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.cr-bloc-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.cr-bloc-card__name {
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.cr-bloc-card__seats {
+  font-size: 0.78rem;
+  color: var(--off-white-dim);
+}
+
+.cr-bloc-card__objection {
+  font-size: 0.82rem;
+  color: var(--off-white-dim);
+  font-style: italic;
+}
+
+.cr-bloc-card__range {
+  font-size: 0.78rem;
+  color: var(--off-white-dim);
+}
+
+.cr-stance-pill {
+  display: inline-block;
+  width: fit-content;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.cr-stance-pill--FORTEMENT_FAVORABLE {
+  background: rgba(62, 201, 139, 0.22);
+  color: var(--green-good);
+}
+
+.cr-stance-pill--PLUTÔT_FAVORABLE {
+  background: rgba(62, 201, 139, 0.14);
+  color: var(--green-good);
+}
+
+.cr-stance-pill--PARTAGÉ {
+  background: rgba(231, 169, 60, 0.16);
+  color: var(--amber-warn);
+}
+
+.cr-stance-pill--PLUTÔT_DÉFAVORABLE {
+  background: rgba(224, 69, 90, 0.14);
+  color: var(--red-bad);
+}
+
+.cr-stance-pill--FORTEMENT_DÉFAVORABLE {
+  background: rgba(224, 69, 90, 0.22);
+  color: var(--red-bad);
+}

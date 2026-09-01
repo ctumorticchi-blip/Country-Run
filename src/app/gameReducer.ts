@@ -2,36 +2,62 @@ import { DEFAULT_ECONOMIC_ENGINE_CONFIG } from '../engine/economy/config/default
 import { applyEffect } from '../engine/effects/apply.ts'
 import type { EconomicPolicyInput, ExternalShock, WorldState } from '../engine/economy/types.ts'
 import type { EconomicState, GameState } from '../engine/state/gameState.ts'
-import { budgetSelectionsToPolicyDelta } from '../game/country-run/budget/budgetEffects.ts'
 import { BUDGET_CATEGORIES, BUDGET_CATEGORY_ORDER } from '../game/country-run/budget/budgetCategories.ts'
 import { NEUTRAL_BUDGET_SELECTIONS, type BudgetCategoryId, type BudgetLevel } from '../game/country-run/budget/budgetTypes.ts'
 import { createInitialGameState } from '../game/country-run/data/initialState.ts'
 import { createInitialWorldState } from '../game/country-run/data/initialWorldState.ts'
-import { computeElectionResult, type ElectionResult } from '../game/country-run/prototype/electionResult.ts'
 import { BERCY_AUDIT, ENERGY_SHOCK } from '../game/country-run/prototype/decisions.ts'
-import { COMPROMISE_SCALE_ON_REJECTION, getParliamentChoice, resolveParliamentVote } from '../game/country-run/prototype/parliament.ts'
+import { computeElectionResult, type ElectionResult } from '../game/country-run/prototype/electionResult.ts'
+import { COMPROMISE_SCALE_ON_REJECTION } from '../game/country-run/prototype/parliament.ts'
 import { generateParliamentComposition, type ParliamentComposition } from '../game/country-run/prototype/parliamentComposition.ts'
 import { appendPolicyHistory, type PolicyHistoryEntry } from '../game/country-run/prototype/policyHistory.ts'
-import { computeInitialPoliticalCapital } from '../game/country-run/prototype/politicalCapital.ts'
+import {
+  applyCapitalDelta,
+  canAffordCapital,
+  clampPoliticalCapital,
+  computeInitialPoliticalCapital,
+  MAX_CAPITAL_SPEND_PER_ACTION,
+  politicalCapitalDeltaFromBillOutcome,
+  politicalCapitalDeltaFromYearEnd,
+  spendCapital,
+} from '../game/country-run/prototype/politicalCapital.ts'
 import { popularityFromBudget, popularityFromParliamentOutcome, popularityFromYearEndOutcomes } from '../game/country-run/prototype/popularity.ts'
-import { createActionRng } from '../game/country-run/prototype/rng.ts'
 import { computeEndingTitle, computeScore, type EndingTitle, type ScoreBreakdown } from '../game/country-run/prototype/scoring.ts'
-import type { DecisionConfig, ParliamentChoiceConfig, ParliamentOutcome, PlayerChoices, ScreenId } from '../game/country-run/prototype/types.ts'
+import type { DecisionConfig, PlayerChoices, ScreenId } from '../game/country-run/prototype/types.ts'
 import { mergePolicyDeltas, scalePolicyInput, simulateYearOne } from '../game/country-run/prototype/yearOneFlow.ts'
 import {
   applyExecutionScaling,
   applyPopularityResilience,
   deriveGovernmentEngineConfig,
   governmentMarketConfidenceNudge,
-  scaleParliamentPassProbability,
 } from '../game/country-run/government/governmentEffects.ts'
 import { getGovernmentProfile } from '../game/country-run/government/governmentProfiles.ts'
 import type { GovernmentModifiers } from '../game/country-run/government/governmentTypes.ts'
+import { getBlocDefinition } from '../game/country-run/parliament/blocDefinitions.ts'
+import { adjustRelation, RELATIONSHIP_EFFECTS, type BlocRelations } from '../game/country-run/parliament/blocRelations.ts'
+import { BUDGET_BILL_ID, deriveBudgetBill } from '../game/country-run/parliament/budgetBillDerivation.ts'
+import { getBillDefinition } from '../game/country-run/parliament/bills.ts'
+import type { ActiveBillState, BillHistoryEntry, PoliticalBillDefinition } from '../game/country-run/parliament/billTypes.ts'
+import { MAX_VOTE_ATTEMPTS } from '../game/country-run/parliament/billTypes.ts'
+import { addConcession, applyConcessionsToBill, type EffectiveBill } from '../game/country-run/parliament/concessions.ts'
+import {
+  applyExceptionalProcedure,
+  blocsHostileToProcedure,
+  canUseExceptionalProcedure,
+  clampGovernmentTension,
+} from '../game/country-run/parliament/exceptionalProcedure.ts'
+import { createDeal, markDealFulfilled, type PoliticalDeal } from '../game/country-run/parliament/politicalDeal.ts'
+import type { ConcessionType } from '../game/country-run/parliament/politicalTypes.ts'
+import { estimateBillSupport } from '../game/country-run/parliament/supportEstimate.ts'
+import { resolveVote, type VoteResult } from '../game/country-run/parliament/voteResolution.ts'
 import { coherenceScore, isCompleteSelection, REQUIRED_PROMISE_COUNT } from '../game/country-run/promises/promiseSelection.ts'
 import type { PromiseCategory } from '../game/country-run/promises/promiseTypes.ts'
 
-/** M3 §28 — bumped whenever the serialized shape of `GamePrototypeState` changes; no migration logic exists yet. */
-export const GAME_VERSION = '0.3.0'
+/** Bumped whenever the serialized shape of `GamePrototypeState` changes; no migration logic exists yet. */
+export const GAME_VERSION = '0.4.0'
+
+/** Flat capital cost of a single SEEK_SUPPORT outreach action (M4 §12) — cheap relative to a full concession, so courting stays a real but minor lever. */
+export const SEEK_SUPPORT_CAPITAL_COST = 2
 
 /**
  * Generates a fresh seed string for a brand-new playthrough. This is the
@@ -66,15 +92,35 @@ export interface GamePrototypeState {
   initialEconomicSnapshot: EconomicState
   initialPopularity: number
   choices: PlayerChoices
-  /** Computed once when the campaign reaches the election screen (M3 §4) — a genuine outcome, not a per-render derived value, so it's stored like `scoreBreakdown` already was in M2. */
+  /** Computed once when the campaign reaches the election screen (M3 §4). */
   electionResult: ElectionResult | null
   /** Computed once when a government profile is chosen (M3 §6-7). */
   parliamentComposition: ParliamentComposition | null
-  /** Computed once at mandate start (M3 §21) — architecture only, nothing spends/replenishes it yet. */
+  /** M3 §21 computed a starting value once; M4 §8-10 makes it a live, spendable/recoverable value for the rest of the run. */
   politicalCapital: number | null
+  /** M4 §14 — one signed score per bloc, nudged by concrete negotiation/vote outcomes. */
+  blocRelations: BlocRelations
+  /** M4 §20 — architecture only this milestone (no government-collapse mechanic yet); tracked for a future confidence-vote system. */
+  governmentTension: number
+  /** The bill currently being negotiated or just voted on, if any (M4 §5, §28 pipeline) — the ONLY bill-related runtime state; everything else about it is re-derived from its `billId` + this state (see `parliament/billTypes.ts`'s 3-layer split). */
+  activeBill: ActiveBillState | null
+  /**
+   * The most recent `CALL_VOTE`'s resolved breakdown, for the vote screen
+   * to display — the one deliberate exception to "never store derived
+   * data" (M4 §36): a vote result is a genuine one-time EVENT (like M2's
+   * `scoreBreakdown`), and re-deriving it on demand isn't safe here since
+   * popularity (a support-formula input) is nudged immediately after the
+   * vote resolves, which would make a later recomputation diverge from
+   * what the vote actually used. Cleared whenever a new bill negotiation
+   * starts; `null` when the exceptional procedure bypassed voting entirely.
+   */
+  lastVoteResult: VoteResult | null
+  /** Finalized bill outcomes (M4 §16, §36) — decisions/events, not economic snapshots. */
+  billHistory: BillHistoryEntry[]
+  /** Struck negotiation agreements (M4 §15), visible in history. */
+  politicalDeals: PoliticalDeal[]
   /** Append-only log of meaningful policy decisions (M3 §24), read by promise evaluators — never itself mutated in place. */
   policyHistory: PolicyHistoryEntry[]
-  parliamentOutcome: ParliamentOutcome | null
   scoreBreakdown: ScoreBreakdown | null
   endingTitle: EndingTitle | null
 }
@@ -95,7 +141,17 @@ export type GameAction =
   | { type: 'CHOOSE_ENERGY'; choiceId: string }
   | { type: 'SET_BUDGET_LEVEL'; category: BudgetCategoryId; level: BudgetLevel }
   | { type: 'SUBMIT_BUDGET' }
-  | { type: 'CHOOSE_PARLIAMENT_VOTE'; choiceId: ParliamentChoiceConfig['id'] }
+  | { type: 'NEGOTIATE_SEEK_SUPPORT'; blocId: string }
+  | { type: 'NEGOTIATE_OFFER_CONCESSION'; concessionId: ConcessionType }
+  | { type: 'NEGOTIATE_SPEND_CAPITAL'; amount: number }
+  | { type: 'NEGOTIATE_REFUSE_COMPROMISE' }
+  | { type: 'CALL_VOTE' }
+  | { type: 'USE_EXCEPTIONAL_PROCEDURE' }
+  | { type: 'RENEGOTIATE_BILL' }
+  | { type: 'WITHDRAW_BILL' }
+  | { type: 'PROCEED_TO_REFORM_HUB' }
+  | { type: 'PROPOSE_BILL'; billId: string }
+  | { type: 'CONCLUDE_YEAR_ONE' }
   | { type: 'REPLAY_SAME_SEED' }
   | { type: 'NEW_GAME' }
 
@@ -111,6 +167,18 @@ const BUDGET_CATEGORY_TO_PROMISE_CATEGORY: Record<BudgetCategoryId, PromiseCateg
   education: 'education',
   investment: 'investment',
   defense: 'security',
+}
+
+/** Resolves a bill id to its definition — the Budget Bill is derived live from the current Budget Builder draft; every other id is a static `BILL_CATALOG` entry (M4 §21, §30). Exported so the UI layer can resolve the same definition for display without duplicating this branch. */
+export function resolveBillDefinition(state: GamePrototypeState, billId: string): PoliticalBillDefinition {
+  return billId === BUDGET_BILL_ID ? deriveBudgetBill(state.choices.budgetSelections) : getBillDefinition(billId)
+}
+
+/** True once the player has brought forward (even if later rejected/withdrawn) their one discretionary Year 1 reform (M4 §31). */
+export function hasUsedDiscretionaryBillSlot(state: Pick<GamePrototypeState, 'billHistory' | 'activeBill'>): boolean {
+  const inHistory = state.billHistory.some((e) => e.billId !== BUDGET_BILL_ID)
+  const inProgress = state.activeBill !== null && state.activeBill.billId !== BUDGET_BILL_ID
+  return inHistory || inProgress
 }
 
 function freshRunState(
@@ -136,13 +204,17 @@ function freshRunState(
       bercyChoiceId: null,
       energyChoiceId: null,
       budgetSelections: { ...NEUTRAL_BUDGET_SELECTIONS },
-      parliamentChoiceId: null,
     },
     electionResult: null,
     parliamentComposition: null,
     politicalCapital: null,
+    blocRelations: {},
+    governmentTension: 0,
+    activeBill: null,
+    lastVoteResult: null,
+    billHistory: [],
+    politicalDeals: [],
     policyHistory: [],
-    parliamentOutcome: null,
     scoreBreakdown: null,
     endingTitle: null,
   }
@@ -186,8 +258,9 @@ function computeCampaignOutcomes(
  * Pure: given the same state and action, always returns the same next
  * state — this is what makes it safe under React's `<StrictMode>`
  * double-invoke (see rng.ts for the full RNG-safety rationale).
- * `CHOOSE_PARLIAMENT_VOTE` is the only action that advances the economic
- * simulation, and it does so exactly once per dispatch.
+ * `CALL_VOTE`/`USE_EXCEPTIONAL_PROCEDURE`/`CONCLUDE_YEAR_ONE` are the only
+ * actions that advance the economic simulation or resolve a vote, and each
+ * does so exactly once per dispatch.
  */
 export function gameReducer(state: GamePrototypeState, action: GameAction): GamePrototypeState {
   switch (action.type) {
@@ -304,11 +377,126 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
           amount: category.levels[level],
         }
       })
-      return { ...state, screen: 'parliamentVote', policyHistory: entries.reduce(appendPolicyHistory, state.policyHistory) }
+      const activeBill: ActiveBillState = {
+        billId: BUDGET_BILL_ID,
+        status: 'NEGOTIATING',
+        appliedConcessionIds: [],
+        courtedBlocIds: [],
+        capitalSpent: 0,
+        turnProposed: state.gameState.meta.turn,
+        voteAttempts: 0,
+      }
+      return {
+        ...state,
+        screen: 'billNegotiation',
+        activeBill,
+        lastVoteResult: null,
+        policyHistory: entries.reduce(appendPolicyHistory, state.policyHistory),
+      }
     }
 
-    case 'CHOOSE_PARLIAMENT_VOTE':
-      return resolveParliamentAndSimulate(state, action.choiceId)
+    case 'NEGOTIATE_SEEK_SUPPORT': {
+      if (!state.activeBill || state.activeBill.status !== 'NEGOTIATING') return state
+      if (state.activeBill.courtedBlocIds.includes(action.blocId)) return state
+      const capital = state.politicalCapital ?? 0
+      if (!canAffordCapital(capital, SEEK_SUPPORT_CAPITAL_COST)) return state
+      return {
+        ...state,
+        politicalCapital: spendCapital(capital, SEEK_SUPPORT_CAPITAL_COST),
+        activeBill: {
+          ...state.activeBill,
+          courtedBlocIds: [...state.activeBill.courtedBlocIds, action.blocId],
+          capitalSpent: state.activeBill.capitalSpent + SEEK_SUPPORT_CAPITAL_COST,
+        },
+      }
+    }
+
+    case 'NEGOTIATE_OFFER_CONCESSION': {
+      if (!state.activeBill || state.activeBill.status !== 'NEGOTIATING') return state
+      const billDef = resolveBillDefinition(state, state.activeBill.billId)
+      if (!billDef.concessionsAvailable.includes(action.concessionId)) return state
+      const nextConcessions = addConcession(state.activeBill.appliedConcessionIds, action.concessionId)
+      if (nextConcessions === state.activeBill.appliedConcessionIds) return state
+      return { ...state, activeBill: { ...state.activeBill, appliedConcessionIds: nextConcessions } }
+    }
+
+    case 'NEGOTIATE_SPEND_CAPITAL': {
+      if (!state.activeBill || state.activeBill.status !== 'NEGOTIATING') return state
+      const amount = Math.min(MAX_CAPITAL_SPEND_PER_ACTION, Math.max(0, action.amount))
+      const capital = state.politicalCapital ?? 0
+      if (amount === 0 || !canAffordCapital(capital, amount)) return state
+      return {
+        ...state,
+        politicalCapital: spendCapital(capital, amount),
+        activeBill: { ...state.activeBill, capitalSpent: state.activeBill.capitalSpent + amount },
+      }
+    }
+
+    case 'NEGOTIATE_REFUSE_COMPROMISE': {
+      if (!state.activeBill || state.activeBill.status !== 'NEGOTIATING') return state
+      return { ...state, activeBill: { ...state.activeBill, status: 'READY_FOR_VOTE' } }
+    }
+
+    case 'CALL_VOTE':
+      return resolveBillVote(state)
+
+    case 'USE_EXCEPTIONAL_PROCEDURE':
+      return resolveExceptionalProcedure(state)
+
+    case 'RENEGOTIATE_BILL': {
+      if (!state.activeBill || state.activeBill.status !== 'REJECTED' || state.activeBill.voteAttempts >= MAX_VOTE_ATTEMPTS) return state
+      return { ...state, activeBill: { ...state.activeBill, status: 'NEGOTIATING' }, screen: 'billNegotiation' }
+    }
+
+    case 'WITHDRAW_BILL': {
+      if (!state.activeBill || state.activeBill.billId === BUDGET_BILL_ID) return state
+      const definition = resolveBillDefinition(state, state.activeBill.billId)
+      const entry: BillHistoryEntry = {
+        turn: state.gameState.meta.turn,
+        billId: definition.id,
+        billTitle: definition.title,
+        status: 'WITHDRAWN',
+        votesFor: 0,
+        votesAgainst: 0,
+        abstentions: 0,
+        appliedConcessionIds: [...state.activeBill.appliedConcessionIds],
+        usedExceptionalProcedure: false,
+        politicalCapitalDelta: 0,
+        popularityDelta: 0,
+      }
+      return { ...state, billHistory: [...state.billHistory, entry], activeBill: null }
+    }
+
+    case 'PROCEED_TO_REFORM_HUB':
+      if (state.activeBill) return state
+      return { ...state, screen: 'reformHub' }
+
+    case 'PROPOSE_BILL': {
+      if (state.activeBill || hasUsedDiscretionaryBillSlot(state) || action.billId === BUDGET_BILL_ID) return state
+      const definition = getBillDefinition(action.billId)
+      const capital = state.politicalCapital ?? 0
+      if (!canAffordCapital(capital, definition.requiredPoliticalCapital)) return state
+      const activeBill: ActiveBillState = {
+        billId: definition.id,
+        status: 'NEGOTIATING',
+        appliedConcessionIds: [],
+        courtedBlocIds: [],
+        capitalSpent: 0,
+        turnProposed: state.gameState.meta.turn,
+        voteAttempts: 0,
+      }
+      return {
+        ...state,
+        politicalCapital: spendCapital(capital, definition.requiredPoliticalCapital),
+        activeBill,
+        lastVoteResult: null,
+        screen: 'billNegotiation',
+      }
+    }
+
+    case 'CONCLUDE_YEAR_ONE':
+      if (state.activeBill) return state
+      return finalizeYearOne(state)
 
     case 'REPLAY_SAME_SEED': {
       const { selectedPromiseIds, governmentProfileId } = state.choices
@@ -332,49 +520,235 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
   }
 }
 
-function resolveParliamentAndSimulate(state: GamePrototypeState, choiceId: ParliamentChoiceConfig['id']): GamePrototypeState {
-  const governmentProfileId = state.choices.governmentProfileId
-  if (!governmentProfileId) throw new Error('CHOOSE_PARLIAMENT_VOTE dispatched before a government profile was chosen')
-  const modifiers: GovernmentModifiers = getGovernmentProfile(governmentProfileId).modifiers
+/**
+ * Updates bloc relationships and records any struck deal from a resolved
+ * vote (M4 §14-15). Only called at TERMINAL resolution (a passed vote or
+ * an attempt-exhausted rejection) — intermediate failed attempts within
+ * the same negotiation don't yet touch relationships.
+ */
+function updateRelationsAndDeals(
+  activeBill: ActiveBillState,
+  effectiveBill: EffectiveBill,
+  voteResult: VoteResult,
+  status: 'ADOPTED' | 'REJECTED',
+  turn: number,
+  blocRelations: BlocRelations,
+  politicalDeals: readonly PoliticalDeal[],
+): { blocRelations: BlocRelations; politicalDeals: PoliticalDeal[] } {
+  let nextRelations = blocRelations
+  const nextDeals = [...politicalDeals]
 
-  const parliamentChoice = getParliamentChoice(choiceId)
+  for (const blocResult of voteResult.blocBreakdown) {
+    if (blocResult.blocId === 'PRESIDENTIAL_BLOC') continue
+    const blocDef = getBlocDefinition(blocResult.blocId)
+    const favored = blocResult.votesFor > blocResult.votesAgainst
+    const wasCourted = activeBill.courtedBlocIds.includes(blocResult.blocId)
+    const grantedConcession = blocDef.preferredConcessions.find((c) => activeBill.appliedConcessionIds.includes(c))
+
+    if (favored) {
+      const delta = grantedConcession
+        ? RELATIONSHIP_EFFECTS.SUCCESSFUL_AGREEMENT
+        : wasCourted
+          ? RELATIONSHIP_EFFECTS.COURTED_AND_DELIVERED
+          : RELATIONSHIP_EFFECTS.PASSIVE_GOODWILL
+      nextRelations = adjustRelation(nextRelations, blocResult.blocId, delta)
+    } else if (wasCourted || grantedConcession) {
+      nextRelations = adjustRelation(nextRelations, blocResult.blocId, RELATIONSHIP_EFFECTS.BROKEN_AGREEMENT)
+    }
+
+    if (wasCourted || grantedConcession) {
+      const deal = createDeal({
+        blocId: blocResult.blocId,
+        billId: effectiveBill.definition.id,
+        turn,
+        concessions: [...activeBill.appliedConcessionIds],
+        expectedVotes: blocResult.seats,
+        relationshipEffect: favored ? RELATIONSHIP_EFFECTS.SUCCESSFUL_AGREEMENT : RELATIONSHIP_EFFECTS.BROKEN_AGREEMENT,
+        fiscalImpact: effectiveBill.fiscalCost,
+        policyImpact: effectiveBill.policyTags,
+      })
+      nextDeals.push(markDealFulfilled(deal, favored && status === 'ADOPTED'))
+    }
+  }
+
+  return { blocRelations: nextRelations, politicalDeals: nextDeals }
+}
+
+function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
+  if (!state.activeBill || !state.parliamentComposition || !state.choices.governmentProfileId) return state
+  const modifiers: GovernmentModifiers = getGovernmentProfile(state.choices.governmentProfileId).modifiers
+  const definition = resolveBillDefinition(state, state.activeBill.billId)
+  const effectiveBill = applyConcessionsToBill(definition, state.activeBill.appliedConcessionIds)
+  const attemptNumber = state.activeBill.voteAttempts + 1
+
+  const voteResult = resolveVote(
+    state.seed,
+    attemptNumber,
+    effectiveBill,
+    state.parliamentComposition,
+    state.blocRelations,
+    state.gameState.political.popularity,
+    modifiers,
+    { courtedBlocIds: state.activeBill.courtedBlocIds, capitalSpent: state.activeBill.capitalSpent },
+  )
+
+  const capitalDelta = politicalCapitalDeltaFromBillOutcome(effectiveBill, voteResult.passed)
+  const politicalCapital = applyCapitalDelta(state.politicalCapital ?? 0, capitalDelta)
+  const popularityDelta = voteResult.passed ? 1.5 : -2.5
+  const gameState = nudgePoliticalWithGovernment(state.gameState, popularityDelta, state.choices.governmentProfileId)
+
+  const attemptsExhausted = attemptNumber >= MAX_VOTE_ATTEMPTS
+  const isTerminal = voteResult.passed || attemptsExhausted
+
+  if (!isTerminal) {
+    return {
+      ...state,
+      gameState,
+      politicalCapital,
+      lastVoteResult: voteResult,
+      activeBill: { ...state.activeBill, status: 'REJECTED', voteAttempts: attemptNumber },
+      screen: 'billVote',
+    }
+  }
+
+  const status: 'ADOPTED' | 'REJECTED' = voteResult.passed ? 'ADOPTED' : 'REJECTED'
+  const { blocRelations, politicalDeals } = updateRelationsAndDeals(
+    state.activeBill,
+    effectiveBill,
+    voteResult,
+    status,
+    state.gameState.meta.turn,
+    state.blocRelations,
+    state.politicalDeals,
+  )
+
+  const historyEntry: BillHistoryEntry = {
+    turn: state.gameState.meta.turn,
+    billId: effectiveBill.definition.id,
+    billTitle: effectiveBill.definition.title,
+    status,
+    votesFor: voteResult.votesFor,
+    votesAgainst: voteResult.votesAgainst,
+    abstentions: voteResult.abstentions,
+    appliedConcessionIds: [...state.activeBill.appliedConcessionIds],
+    usedExceptionalProcedure: false,
+    politicalCapitalDelta: capitalDelta,
+    popularityDelta,
+  }
+
+  return {
+    ...state,
+    gameState,
+    politicalCapital,
+    blocRelations,
+    politicalDeals,
+    lastVoteResult: voteResult,
+    billHistory: [...state.billHistory, historyEntry],
+    activeBill: null,
+    screen: 'billVote',
+  }
+}
+
+function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeState {
+  if (!state.activeBill || !state.parliamentComposition || !state.choices.governmentProfileId) return state
+  const capital = state.politicalCapital ?? 0
+  if (!canUseExceptionalProcedure(capital)) return state
+  const modifiers = getGovernmentProfile(state.choices.governmentProfileId).modifiers
+  const definition = resolveBillDefinition(state, state.activeBill.billId)
+  const effectiveBill = applyConcessionsToBill(definition, state.activeBill.appliedConcessionIds)
+
+  const support = estimateBillSupport(effectiveBill, state.parliamentComposition, state.blocRelations, state.gameState.political.popularity, modifiers, {
+    courtedBlocIds: state.activeBill.courtedBlocIds,
+    capitalSpent: state.activeBill.capitalSpent,
+  })
+  const hostileBlocIds = blocsHostileToProcedure(support.blocBreakdown)
+
+  const procedureResult = applyExceptionalProcedure(capital, state.governmentTension)
+  let blocRelations = state.blocRelations
+  for (const blocId of hostileBlocIds) {
+    blocRelations = adjustRelation(blocRelations, blocId, RELATIONSHIP_EFFECTS.PROCEDURAL_FORCING)
+  }
+
+  const gameState = nudgePoliticalWithGovernment(state.gameState, procedureResult.popularityDelta, state.choices.governmentProfileId)
+
+  const historyEntry: BillHistoryEntry = {
+    turn: state.gameState.meta.turn,
+    billId: effectiveBill.definition.id,
+    billTitle: effectiveBill.definition.title,
+    status: 'ADOPTED',
+    votesFor: 0,
+    votesAgainst: 0,
+    abstentions: 0,
+    appliedConcessionIds: [...state.activeBill.appliedConcessionIds],
+    usedExceptionalProcedure: true,
+    politicalCapitalDelta: procedureResult.politicalCapitalAfter - capital,
+    popularityDelta: procedureResult.popularityDelta,
+  }
+
+  return {
+    ...state,
+    gameState,
+    politicalCapital: procedureResult.politicalCapitalAfter,
+    governmentTension: clampGovernmentTension(procedureResult.governmentTensionAfter),
+    blocRelations,
+    lastVoteResult: null,
+    billHistory: [...state.billHistory, historyEntry],
+    activeBill: null,
+    screen: 'billVote',
+  }
+}
+
+/**
+ * Runs the ONE real economic simulation for Year 1 (M4 §40), after both
+ * the mandatory Budget Bill and the optional discretionary reform have
+ * been resolved (or the reform slot skipped). Bercy/energy policies are
+ * fixed presidential decisions from earlier in the flow; the Budget Bill's
+ * effective policy is scaled down (M2's `COMPROMISE_SCALE_ON_REJECTION`)
+ * ONLY if it never passed, so a bill that failed still lets the country
+ * have SOME budget; a rejected discretionary bill simply contributes
+ * nothing (it was optional).
+ */
+function finalizeYearOne(state: GamePrototypeState): GamePrototypeState {
+  const governmentProfileId = state.choices.governmentProfileId
+  if (!governmentProfileId) return state
+  const modifiers = getGovernmentProfile(governmentProfileId).modifiers
+
   const bercyChoice = state.choices.bercyChoiceId ? findDecisionChoice(BERCY_AUDIT, state.choices.bercyChoiceId) : null
   const energyChoice = state.choices.energyChoiceId ? findDecisionChoice(ENERGY_SHOCK, state.choices.energyChoiceId) : null
 
-  const budgetDelta = budgetSelectionsToPolicyDelta(state.choices.budgetSelections)
-  let policy: EconomicPolicyInput = mergePolicyDeltas(
-    bercyChoice?.policyDelta ?? {},
-    energyChoice?.policyDelta ?? {},
-    budgetDelta,
-    parliamentChoice.concession,
-  )
-  policy = applyExecutionScaling(policy, modifiers)
+  const budgetEntry = state.billHistory.find((e) => e.billId === BUDGET_BILL_ID) ?? null
+  const budgetDefinition = deriveBudgetBill(state.choices.budgetSelections)
+  const budgetEffective = applyConcessionsToBill(budgetDefinition, budgetEntry?.appliedConcessionIds ?? [])
+  const budgetPolicyFull = mergePolicyDeltas(budgetEffective.economicPolicyEffect)
+  const budgetPolicy = budgetEntry?.status === 'ADOPTED' ? budgetPolicyFull : scalePolicyInput(budgetPolicyFull, COMPROMISE_SCALE_ON_REJECTION)
 
-  const scaledPassProbability = scaleParliamentPassProbability(parliamentChoice.passProbability, modifiers)
-  const outcome: ParliamentOutcome = resolveParliamentVote(
-    { ...parliamentChoice, passProbability: scaledPassProbability },
-    createActionRng(state.seed, 'parliament-vote'),
-  )
-  if (outcome === 'rejected') {
-    policy = scalePolicyInput(policy, COMPROMISE_SCALE_ON_REJECTION)
+  const discretionaryEntry = state.billHistory.find((e) => e.billId !== BUDGET_BILL_ID) ?? null
+  let discretionaryPolicy: Partial<EconomicPolicyInput> = {}
+  if (discretionaryEntry?.status === 'ADOPTED') {
+    const discretionaryDefinition = getBillDefinition(discretionaryEntry.billId)
+    const discretionaryEffective = applyConcessionsToBill(discretionaryDefinition, discretionaryEntry.appliedConcessionIds)
+    discretionaryPolicy = discretionaryEffective.economicPolicyEffect
   }
+
+  let policy: EconomicPolicyInput = mergePolicyDeltas(bercyChoice?.policyDelta ?? {}, energyChoice?.policyDelta ?? {}, budgetPolicy, discretionaryPolicy)
+  policy = applyExecutionScaling(policy, modifiers)
 
   const shocks: ExternalShock[] = state.choices.energyChoiceId && ENERGY_SHOCK.shock ? [ENERGY_SHOCK.shock] : []
   const engineConfig = deriveGovernmentEngineConfig(DEFAULT_ECONOMIC_ENGINE_CONFIG, modifiers)
-
   const simulatedGameState = simulateYearOne(state.gameState, policy, state.worldState, state.seed, shocks, engineConfig)
 
   const purchasingPowerDelta = simulatedGameState.economic.purchasingPower - state.initialEconomicSnapshot.purchasingPower
   const unemploymentDelta = simulatedGameState.economic.unemployment - state.initialEconomicSnapshot.unemployment
+  const growthDelta = simulatedGameState.economic.growth - state.initialEconomicSnapshot.growth
 
-  const rawPopularityDelta =
-    parliamentChoice.popularityDelta +
-    popularityFromParliamentOutcome(outcome) +
+  const rawPopularityDelta = popularityFromParliamentOutcome(budgetEntry?.status === 'ADOPTED' ? 'adopted' : 'rejected') +
     popularityFromBudget(state.choices.budgetSelections) +
     popularityFromYearEndOutcomes(purchasingPowerDelta, unemploymentDelta)
   const totalPopularityDelta = applyPopularityResilience(rawPopularityDelta, modifiers)
-
   const finalGameState = nudgePolitical(simulatedGameState, totalPopularityDelta)
+
+  const yearEndCapitalDelta = politicalCapitalDeltaFromYearEnd(state.initialPopularity, finalGameState.political.popularity, growthDelta)
+  const politicalCapital = clampPoliticalCapital(applyCapitalDelta(state.politicalCapital ?? 0, yearEndCapitalDelta))
 
   const scoreBreakdown = computeScore(
     state.initialEconomicSnapshot,
@@ -389,20 +763,12 @@ function resolveParliamentAndSimulate(state: GamePrototypeState, choiceId: Parli
     state.choices.budgetSelections,
   )
 
-  const historyEntry: PolicyHistoryEntry = {
-    turn: finalGameState.meta.turn,
-    sourceId: `parliament-vote:${outcome}`,
-    label: `Vote du budget — ${outcome === 'adopted' ? 'adopté' : 'rejeté'}`,
-  }
-
   return {
     ...state,
     screen: 'yearReport',
     gameState: finalGameState,
-    parliamentOutcome: outcome,
+    politicalCapital,
     scoreBreakdown,
     endingTitle,
-    choices: { ...state.choices, parliamentChoiceId: choiceId },
-    policyHistory: appendPolicyHistory(state.policyHistory, historyEntry),
   }
 }

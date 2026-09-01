@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { EconomicState } from '../../engine/state/gameState.ts'
-import type { ParliamentOutcome } from '../../game/country-run/prototype/types.ts'
+import { BUDGET_BILL_ID } from '../../game/country-run/parliament/budgetBillDerivation.ts'
+import type { BillHistoryEntry } from '../../game/country-run/parliament/billTypes.ts'
 import type { EndingTitle, ScoreBreakdown } from '../../game/country-run/prototype/scoring.ts'
 import { formatPercent, purchasingPowerIndex } from '../format.ts'
 
@@ -9,7 +10,8 @@ interface YearReportScreenProps {
   finalEconomic: EconomicState
   initialPopularity: number
   finalPopularity: number
-  parliamentOutcome: ParliamentOutcome
+  politicalCapital: number
+  billHistory: BillHistoryEntry[]
   scoreBreakdown: ScoreBreakdown
   endingTitle: EndingTitle
   onReplaySameSeed: () => void
@@ -38,18 +40,27 @@ function shareText(scoreBreakdown: ScoreBreakdown, initialEconomic: EconomicStat
   ].join('\n')
 }
 
+const BILL_STATUS_LABEL: Record<BillHistoryEntry['status'], string> = {
+  ADOPTED: 'ADOPTÉ',
+  REJECTED: 'REJETÉ',
+  WITHDRAWN: 'RETIRÉ',
+}
+
 export function YearReportScreen({
   initialEconomic,
   finalEconomic,
   initialPopularity,
   finalPopularity,
-  parliamentOutcome,
+  politicalCapital,
+  billHistory,
   scoreBreakdown,
   endingTitle,
   onReplaySameSeed,
   onNewGame,
 }: YearReportScreenProps) {
   const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'shared'>('idle')
+  const budgetEntry = billHistory.find((e) => e.billId === BUDGET_BILL_ID)
+  const discretionaryEntry = billHistory.find((e) => e.billId !== BUDGET_BILL_ID)
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(
@@ -80,9 +91,17 @@ export function YearReportScreen({
         <div>
           <p className="cr-eyebrow">31 décembre 2027</p>
           <h1 className="cr-title">BILAN — ANNÉE 1</h1>
-          <span className={`cr-badge ${parliamentOutcome === 'adopted' ? 'cr-badge--adopted' : 'cr-badge--rejected'}`}>
-            {parliamentOutcome === 'adopted' ? 'BUDGET ADOPTÉ' : 'BUDGET REJETÉ — compromis simplifié appliqué'}
-          </span>
+          {budgetEntry ? (
+            <span className={`cr-badge ${budgetEntry.status === 'ADOPTED' ? 'cr-badge--adopted' : 'cr-badge--rejected'}`}>
+              BUDGET {BILL_STATUS_LABEL[budgetEntry.status]}
+              {budgetEntry.usedExceptionalProcedure ? ' (responsabilité engagée)' : ''}
+            </span>
+          ) : null}
+          {discretionaryEntry ? (
+            <span className={`cr-badge ${discretionaryEntry.status === 'ADOPTED' ? 'cr-badge--adopted' : 'cr-badge--rejected'}`} style={{ marginLeft: '0.5rem' }}>
+              {discretionaryEntry.billTitle} — {BILL_STATUS_LABEL[discretionaryEntry.status]}
+            </span>
+          ) : null}
         </div>
 
         <div className="cr-card cr-score">
@@ -103,6 +122,11 @@ export function YearReportScreen({
             purchasingPowerIndex(finalEconomic.purchasingPower).toFixed(1),
           )}
           {reportRow('Popularité', `${initialPopularity.toFixed(0)}%`, `${finalPopularity.toFixed(0)}%`)}
+        </div>
+
+        <div className="cr-report-row">
+          <span className="cr-report-row__label">Capital politique restant</span>
+          <span className="cr-report-row__value">{politicalCapital} / 100</span>
         </div>
 
         <div className="cr-button-row">
