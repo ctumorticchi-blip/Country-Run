@@ -1,52 +1,96 @@
-import { useReducer } from 'react'
-import { bercyAuditText, BERCY_AUDIT, ENERGY_SHOCK } from '../game/country-run/prototype/decisions.ts'
+import { useEffect, useReducer, useState } from 'react'
+import { bercyAuditText, BERCY_AUDIT } from '../game/country-run/prototype/decisions.ts'
 import { isFiscallyDifficult, totalEstimatedAnnualCost } from '../game/country-run/promises/promiseSelection.ts'
-import type { BudgetCategoryId, BudgetLevel } from '../game/country-run/budget/budgetTypes.ts'
+import type { BudgetCategoryId } from '../game/country-run/budget/budgetTypes.ts'
 import type { PromiseEvaluationContext } from '../game/country-run/promises/promiseTypes.ts'
 import { getGovernmentProfile } from '../game/country-run/government/governmentProfiles.ts'
-import { BILL_CATALOG } from '../game/country-run/parliament/bills.ts'
+import { getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
+import { isMidtermTurn } from '../game/country-run/mandate/calendar.ts'
 import { BUDGET_BILL_ID } from '../game/country-run/parliament/budgetBillDerivation.ts'
 import { MAX_VOTE_ATTEMPTS } from '../game/country-run/parliament/billTypes.ts'
 import { applyConcessionsToBill } from '../game/country-run/parliament/concessions.ts'
 import { canUseExceptionalProcedure } from '../game/country-run/parliament/exceptionalProcedure.ts'
 import { estimateBillSupport } from '../game/country-run/parliament/supportEstimate.ts'
+import { DetailPanel } from './components/DetailPanel.tsx'
+import { NavBar, type NavTab } from './components/NavBar.tsx'
 import { PromiseTracker } from './components/PromiseTracker.tsx'
-import { createInitialGamePrototypeState, gameReducer, resolveBillDefinition, type GamePrototypeState } from './gameReducer.ts'
+import { availableReformBills, createInitialGamePrototypeState, gameReducer, resolveBillDefinition, type GamePrototypeState } from './gameReducer.ts'
+import { loadGame, saveGame } from './save.ts'
 import { BillNegotiationScreen } from './screens/BillNegotiationScreen.tsx'
 import { BudgetBuilderScreen } from './screens/BudgetBuilderScreen.tsx'
 import { CampaignIntroScreen } from './screens/CampaignIntroScreen.tsx'
 import { DecisionScreen } from './screens/DecisionScreen.tsx'
 import { ElectionScreen } from './screens/ElectionScreen.tsx'
+import { EventScreen } from './screens/EventScreen.tsx'
 import { FranceBriefingScreen } from './screens/FranceBriefingScreen.tsx'
 import { GovernmentSelectionScreen } from './screens/GovernmentSelectionScreen.tsx'
 import { LandingScreen } from './screens/LandingScreen.tsx'
 import { LegislativeElectionScreen } from './screens/LegislativeElectionScreen.tsx'
+import { MandateReviewScreen } from './screens/MandateReviewScreen.tsx'
 import { MandateStartScreen } from './screens/MandateStartScreen.tsx'
+import { MandateTurnScreen } from './screens/MandateTurnScreen.tsx'
 import { ParliamentCompositionScreen } from './screens/ParliamentCompositionScreen.tsx'
 import { PromiseConfirmationScreen } from './screens/PromiseConfirmationScreen.tsx'
 import { PromiseSelectionScreen } from './screens/PromiseSelectionScreen.tsx'
 import { ReformHubScreen } from './screens/ReformHubScreen.tsx'
 import { VoteScreen } from './screens/VoteScreen.tsx'
-import { YearReportScreen } from './screens/YearReportScreen.tsx'
+import { YearReviewScreen } from './screens/YearReviewScreen.tsx'
 import './game.css'
 
+const NAV_SCREENS = new Set(['mandateTurn', 'event', 'budgetBuilder', 'billNegotiation', 'billVote', 'reformHub', 'yearReview'])
+
 /**
- * Country Run — M4: the Budget Bill and one discretionary Year 1 reform
- * both flow through the same negotiation → vote pipeline
- * (`billNegotiation` / `billVote` / `reformHub`), on top of the M3
- * campaign and the M2 Bercy/energy/Budget Builder screens. All simulation
- * advancement happens inside `gameReducer` (dispatched only by these
- * explicit callbacks), never during render — see gameReducer.ts /
- * prototype/rng.ts for the React-StrictMode RNG-safety rationale.
+ * Country Run — M5: the full 5-year, 30-turn mandate. The Budget Bill and
+ * discretionary reform pipeline (`billNegotiation`/`billVote`/`reformHub`)
+ * from M4 now repeats once per gameplay year on top of a per-turn
+ * `mandateTurn` loop (advancing the calendar only on the explicit
+ * `ADVANCE_TURN` dispatch — never during render), interrupted by `event`
+ * whenever `EVENT_CATALOG` fires one. All simulation advancement happens
+ * inside `gameReducer`, dispatched only by explicit callbacks — see
+ * gameReducer.ts / prototype/rng.ts for the React-StrictMode RNG-safety
+ * rationale.
  */
 export function App() {
   const [state, dispatch] = useReducer(gameReducer, undefined, createInitialGamePrototypeState)
+  const [detailTab, setDetailTab] = useState<NavTab | null>(null)
+  // Read once at mount — a save with real progress (not just a fresh landing state) offers REPRENDRE LA PARTIE (M5 §56).
+  const [savedGame, setSavedGame] = useState<GamePrototypeState | null>(() => {
+    const loaded = loadGame()
+    return loaded && loaded.screen !== 'landing' ? loaded : null
+  })
+
+  // Persisted after every resolved turn/decision — any state change re-saves. Cheap and idempotent (see save.ts).
+  useEffect(() => {
+    saveGame(state)
+  }, [state])
+
+  if (detailTab) {
+    return (
+      <div className="cr-root">
+        <NavBar activeTab={detailTab} onSelect={(tab) => { setDetailTab(tab === detailTab ? null : tab) }} />
+        <DetailPanel tab={detailTab} state={state} onClose={() => { setDetailTab(null) }} />
+      </div>
+    )
+  }
+
+  const nav = NAV_SCREENS.has(state.screen) ? <NavBar activeTab={null} onSelect={setDetailTab} /> : null
 
   switch (state.screen) {
     case 'landing':
       return (
         <div className="cr-root">
-          <LandingScreen onStart={() => { dispatch({ type: 'START_GAME' }) }} />
+          <LandingScreen
+            canResume={savedGame !== null}
+            onStart={() => {
+              setSavedGame(null)
+              dispatch({ type: 'START_GAME' })
+            }}
+            onResume={() => {
+              if (!savedGame) return
+              dispatch({ type: 'RESUME_SAVED_GAME', savedState: savedGame })
+              setSavedGame(null)
+            }}
+          />
         </div>
       )
 
@@ -159,29 +203,16 @@ export function App() {
       )
     }
 
-    case 'energyShock':
-      return (
-        <div className="cr-root">
-          <DecisionScreen
-            decision={ENERGY_SHOCK}
-            economic={state.gameState.economic}
-            political={state.gameState.political}
-            meta={state.gameState.meta}
-            onChoose={(choiceId) => { dispatch({ type: 'CHOOSE_ENERGY', choiceId }) }}
-          />
-          <PromiseTrackerSection state={state} />
-        </div>
-      )
-
     case 'budgetBuilder':
       return (
         <div className="cr-root">
+          {nav}
           <BudgetBuilderScreen
             economic={state.gameState.economic}
-            selections={state.choices.budgetSelections}
-            onChangeLevel={(category: BudgetCategoryId, level: BudgetLevel) => {
-              dispatch({ type: 'SET_BUDGET_LEVEL', category, level })
-            }}
+            budgetLabel={state.currentBudgetLabel ?? 'Budget'}
+            selections={state.draftBudgetSelections}
+            previousLevels={state.budgetLevels}
+            onChangeTier={(category: BudgetCategoryId, tierId: string) => { dispatch({ type: 'SET_BUDGET_TIER', category, tierId }) }}
             onSubmit={() => { dispatch({ type: 'SUBMIT_BUDGET' }) }}
           />
           <PromiseTrackerSection state={state} />
@@ -201,6 +232,7 @@ export function App() {
       })
       return (
         <div className="cr-root">
+          {nav}
           <BillNegotiationScreen
             effectiveBill={effectiveBill}
             support={support}
@@ -227,6 +259,7 @@ export function App() {
       const canWithdraw = !isTerminal && state.activeBill?.billId !== BUDGET_BILL_ID
       return (
         <div className="cr-root">
+          {nav}
           <VoteScreen
             billTitle={billTitle}
             voteResult={state.lastVoteResult}
@@ -237,7 +270,7 @@ export function App() {
             onWithdraw={() => { dispatch({ type: 'WITHDRAW_BILL' }) }}
             onContinue={() => {
               const justResolvedBudget = finalEntry?.billId === BUDGET_BILL_ID
-              dispatch({ type: justResolvedBudget ? 'PROCEED_TO_REFORM_HUB' : 'CONCLUDE_YEAR_ONE' })
+              dispatch({ type: justResolvedBudget ? 'PROCEED_TO_REFORM_HUB' : 'BEGIN_TURN_LOOP' })
             }}
           />
           <PromiseTrackerSection state={state} />
@@ -251,50 +284,99 @@ export function App() {
       }
       const modifiers = getGovernmentProfile(state.choices.governmentProfileId).modifiers
       const composition = state.parliamentComposition
-      const bills = BILL_CATALOG.map((definition) => {
+      const bills = availableReformBills(state).map((definition) => {
         const effectiveBill = applyConcessionsToBill(definition, [])
         const support = estimateBillSupport(effectiveBill, composition, state.blocRelations, state.gameState.political.popularity, modifiers, null)
         return { definition, support }
       })
       return (
         <div className="cr-root">
+          {nav}
           <ReformHubScreen
             bills={bills}
             politicalCapital={state.politicalCapital}
             onChoose={(billId) => { dispatch({ type: 'PROPOSE_BILL', billId }) }}
-            onSkip={() => { dispatch({ type: 'CONCLUDE_YEAR_ONE' }) }}
+            onSkip={() => { dispatch({ type: 'BEGIN_TURN_LOOP' }) }}
           />
           <PromiseTrackerSection state={state} />
         </div>
       )
     }
 
-    case 'yearReport':
-      if (!state.scoreBreakdown || !state.endingTitle || state.politicalCapital === null) {
-        // Defensive fallback — should be unreachable, the reducer always sets these together (see gameReducer.ts).
-        return <div className="cr-root" />
-      }
+    case 'mandateTurn':
       return (
         <div className="cr-root">
-          <YearReportScreen
+          {nav}
+          <MandateTurnScreen
+            turn={state.gameState.meta.turn}
+            economic={state.gameState.economic}
+            popularity={state.gameState.political.popularity}
+            politicalCapital={state.politicalCapital ?? 0}
+            governmentTension={state.governmentTension}
+            onAdvance={() => { dispatch({ type: 'ADVANCE_TURN' }) }}
+          />
+          <PromiseTrackerSection state={state} />
+        </div>
+      )
+
+    case 'event': {
+      if (!state.activeEventId) return <div className="cr-root" />
+      const event = getEventDefinition(state.activeEventId)
+      return (
+        <div className="cr-root">
+          {nav}
+          <EventScreen
+            event={event}
+            lastChoice={state.lastEventChoice}
+            onChoose={(choiceId) => { dispatch({ type: 'CHOOSE_EVENT', choiceId }) }}
+            onContinue={() => { dispatch({ type: 'CONTINUE_AFTER_EVENT' }) }}
+          />
+          <PromiseTrackerSection state={state} />
+        </div>
+      )
+    }
+
+    case 'yearReview':
+      if (!state.finalScoreBreakdown || state.politicalCapital === null) return <div className="cr-root" />
+      return (
+        <div className="cr-root">
+          {nav}
+          <YearReviewScreen
+            turn={state.gameState.meta.turn}
+            isMidterm={isMidtermTurn(state.gameState.meta.turn)}
+            initialEconomic={state.initialEconomicSnapshot}
+            currentEconomic={state.gameState.economic}
+            initialPopularity={state.initialPopularity}
+            currentPopularity={state.gameState.political.popularity}
+            politicalCapital={state.politicalCapital}
+            governmentTension={state.governmentTension}
+            scoreBreakdown={state.finalScoreBreakdown}
+            onContinue={() => { dispatch({ type: 'CONTINUE_FROM_YEAR_REVIEW' }) }}
+          />
+          <PromiseTrackerSection state={state} />
+        </div>
+      )
+
+    case 'mandateReview':
+      if (!state.finalScoreBreakdown || !state.endingTitle) return <div className="cr-root" />
+      return (
+        <div className="cr-root">
+          <MandateReviewScreen
             initialEconomic={state.initialEconomicSnapshot}
             finalEconomic={state.gameState.economic}
             initialPopularity={state.initialPopularity}
             finalPopularity={state.gameState.political.popularity}
-            politicalCapital={state.politicalCapital}
-            billHistory={state.billHistory}
-            scoreBreakdown={state.scoreBreakdown}
+            promiseResolutions={state.promiseResolutions}
+            scoreBreakdown={state.finalScoreBreakdown}
             endingTitle={state.endingTitle}
-            onReplaySameSeed={() => { dispatch({ type: 'REPLAY_SAME_SEED' }) }}
             onNewGame={() => { dispatch({ type: 'NEW_GAME' }) }}
           />
-          <PromiseTrackerSection state={state} />
         </div>
       )
   }
 }
 
-/** Shared "MES 5 ENGAGEMENTS" panel, shown on every screen from mandate start onward (M3 §22-25). */
+/** Shared "MES 5 ENGAGEMENTS" panel, shown on every screen from mandate start onward (M3 §22-25), now resolution-aware (M5 §15-16). */
 function PromiseTrackerSection({ state }: { state: GamePrototypeState }) {
   if (state.choices.selectedPromiseIds.length === 0) return null
   const context: PromiseEvaluationContext = {
@@ -305,7 +387,7 @@ function PromiseTrackerSection({ state }: { state: GamePrototypeState }) {
   }
   return (
     <div className="cr-page" style={{ paddingTop: 0 }}>
-      <PromiseTracker selectedPromiseIds={state.choices.selectedPromiseIds} context={context} />
+      <PromiseTracker selectedPromiseIds={state.choices.selectedPromiseIds} context={context} resolutions={state.promiseResolutions} />
     </div>
   )
 }

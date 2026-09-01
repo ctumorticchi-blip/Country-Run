@@ -1,47 +1,62 @@
 import type { EconomicPolicyInput } from '../../../engine/economy/types.ts'
 
-/** M2 only implements these four controllable budget categories (see docs/GAMEPLAY_M2.md). */
-export type BudgetCategoryId = 'health' | 'education' | 'investment' | 'defense'
-
-/** Every category offers exactly three levels: cut spending, keep it flat, or invest more. */
-export type BudgetLevel = 'cut' | 'maintain' | 'invest'
-
 /**
- * Which `EconomicPolicyInput` field a category's Md€ delta feeds. Several
- * categories can share a field (health and defense both feed
- * `currentSpendingChanges` — the engine only cares about the aggregate, not
- * which ministry it came from); `budgetEffects.ts` sums per field.
+ * M5 §30: 7 controllable policy blocks — game-control ENVELOPES, not literal
+ * exhaustive COFOG accounting. Pensions/taxes stay reforms (`parliament/`)
+ * rather than budget categories until a dedicated architecture exists for
+ * them (documented limitation, see docs/MANDATE_M5.md).
  */
+export type BudgetCategoryId =
+  | 'health'
+  | 'education'
+  | 'publicInvestment'
+  | 'defense'
+  | 'housingTerritories'
+  | 'greenTransition'
+  | 'administrationEfficiency'
+
 export type BudgetEngineField = Extract<
   keyof EconomicPolicyInput,
-  'currentSpendingChanges' | 'educationInvestment' | 'publicInvestmentChanges'
+  'currentSpendingChanges' | 'educationInvestment' | 'publicInvestmentChanges' | 'infrastructureInvestment'
 >
+
+/** One selectable tier within a category — an ABSOLUTE annualized Md€/year level (M5 §31), not a delta from the previous cycle. Picking a tier makes it the new persistent level for that category. */
+export interface BudgetTier {
+  id: string
+  label: string
+  value: number
+  copy: string
+}
 
 export interface BudgetCategoryConfig {
   id: BudgetCategoryId
   label: string
-  /** Current baseline annual spending, Md€ — display only, not itself fed to the engine. */
+  /** Reference baseline annual spending, Md€ — display only, not itself fed to the engine (M5 §30: envelope, not exhaustive accounting). */
   baseline: number
   engineField: BudgetEngineField
-  levels: Record<BudgetLevel, number>
-  copy: Record<BudgetLevel, string>
+  tiers: BudgetTier[]
 }
 
-/** The player's current choice for every category. */
-export type BudgetSelections = Record<BudgetCategoryId, BudgetLevel>
+/** The player's currently SELECTED tier id per category for the budget cycle being drafted (ephemeral UI draft — resolved to an absolute level on submission). */
+export type BudgetSelections = Record<BudgetCategoryId, string>
 
-export const NEUTRAL_BUDGET_SELECTIONS: BudgetSelections = {
-  health: 'maintain',
-  education: 'maintain',
-  investment: 'maintain',
-  defense: 'maintain',
-}
+/**
+ * The PERSISTENT absolute Md€/year level per category, carried across every
+ * budget cycle in the mandate (M5 §29). This — not `BudgetSelections` — is
+ * what `mandate/turnController.ts` folds into the sustained policy input:
+ * a category kept at the same level year over year contributes a zero
+ * policy DELTA (computed by the engine itself via `computePolicyDelta`),
+ * exactly the M1.5 discipline, now exercised every year instead of once.
+ */
+export type BudgetLevels = Record<BudgetCategoryId, number>
 
 export type BercyWarningLevel = 'expansionist' | 'stimulus' | 'balanced' | 'consolidation' | 'austerity'
 
 export interface BudgetImpactEstimate {
-  /** Sum of all categories' Md€/year deltas — the number the Bercy warning is based on. */
-  netAnnualChange: number
+  /** Sum of all categories' Md€/year ABSOLUTE levels — the total fiscal stance the Bercy-style warning is based on. */
+  totalAnnualLevel: number
+  /** Sum of (new level - previous level) per category — M5 §32 "change vs current policy". */
+  netChangeFromCurrentPolicy: number
   warningLevel: BercyWarningLevel
   /** Rough [low, high] band, percentage points, for the deficit ratio's next-turn move. */
   deficitRatioDeltaRange: [number, number]

@@ -1,20 +1,18 @@
 import { useState } from 'react'
 import type { EconomicState } from '../../engine/state/gameState.ts'
-import { BUDGET_BILL_ID } from '../../game/country-run/parliament/budgetBillDerivation.ts'
-import type { BillHistoryEntry } from '../../game/country-run/parliament/billTypes.ts'
-import type { EndingTitle, ScoreBreakdown } from '../../game/country-run/prototype/scoring.ts'
+import type { EndingTitle, FinalScoreBreakdown } from '../../game/country-run/mandate/finalScoring.ts'
+import { getPromiseDefinition } from '../../game/country-run/promises/promiseCatalog.ts'
+import type { PromiseResolution } from '../../game/country-run/promises/promiseResolution.ts'
 import { formatPercent, purchasingPowerIndex } from '../format.ts'
 
-interface YearReportScreenProps {
+interface MandateReviewScreenProps {
   initialEconomic: EconomicState
   finalEconomic: EconomicState
   initialPopularity: number
   finalPopularity: number
-  politicalCapital: number
-  billHistory: BillHistoryEntry[]
-  scoreBreakdown: ScoreBreakdown
+  promiseResolutions: PromiseResolution[]
+  scoreBreakdown: FinalScoreBreakdown
   endingTitle: EndingTitle
-  onReplaySameSeed: () => void
   onNewGame: () => void
 }
 
@@ -29,38 +27,41 @@ function reportRow(label: string, from: string, to: string) {
   )
 }
 
-function shareText(scoreBreakdown: ScoreBreakdown, initialEconomic: EconomicState, finalEconomic: EconomicState, finalPopularity: number): string {
+const PROMISE_STATUS_LABEL: Record<PromiseResolution['finalStatus'], string> = { KEPT: 'TENU', PARTIAL: 'PARTIEL', BROKEN: 'ROMPU' }
+
+const SCORE_LABEL: Record<keyof Omit<FinalScoreBreakdown, 'catastropheMultiplier' | 'total'>, string> = {
+  economy: 'Économie',
+  publicFinances: 'Finances publiques',
+  purchasingPower: 'Pouvoir d’achat',
+  employment: 'Emploi',
+  promises: 'Promesses',
+  politicalStability: 'Stabilité politique',
+  publicInvestmentServices: 'Investissement & services publics',
+}
+
+function shareText(scoreBreakdown: FinalScoreBreakdown, endingTitle: EndingTitle, initialEconomic: EconomicState, finalEconomic: EconomicState): string {
   return [
-    '🇫🇷 COUNTRY RUN',
+    '🇫🇷 COUNTRY RUN — 5 ANS PLUS TARD',
     `Score: ${String(scoreBreakdown.total)} / 10 000`,
+    endingTitle,
     `Dette: ${initialEconomic.debtRatio.toFixed(0)}% → ${finalEconomic.debtRatio.toFixed(0)}%`,
     `Croissance: ${formatPercent(initialEconomic.growth)} → ${formatPercent(finalEconomic.growth)}`,
-    `Popularité: ${finalPopularity.toFixed(0)}%`,
     '« Tu ferais mieux ? »',
   ].join('\n')
 }
 
-const BILL_STATUS_LABEL: Record<BillHistoryEntry['status'], string> = {
-  ADOPTED: 'ADOPTÉ',
-  REJECTED: 'REJETÉ',
-  WITHDRAWN: 'RETIRÉ',
-}
-
-export function YearReportScreen({
+/** M5 §54-59: "5 ANS PLUS TARD" — the mandate-ending report, full 2027→2032 comparison, final promise record, final score, and expanded ending title. No reelection campaign yet (M5 explicitly defers that) — the only next step is a new game. */
+export function MandateReviewScreen({
   initialEconomic,
   finalEconomic,
   initialPopularity,
   finalPopularity,
-  politicalCapital,
-  billHistory,
+  promiseResolutions,
   scoreBreakdown,
   endingTitle,
-  onReplaySameSeed,
   onNewGame,
-}: YearReportScreenProps) {
+}: MandateReviewScreenProps) {
   const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'shared'>('idle')
-  const budgetEntry = billHistory.find((e) => e.billId === BUDGET_BILL_ID)
-  const discretionaryEntry = billHistory.find((e) => e.billId !== BUDGET_BILL_ID)
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(
@@ -70,11 +71,7 @@ export function YearReportScreen({
   }
 
   const handleShare = () => {
-    const text = shareText(scoreBreakdown, initialEconomic, finalEconomic, finalPopularity)
-    // Progressive enhancement (M2 §21): Web Share API where available, clipboard copy otherwise.
-    // TS's DOM lib types both as always present even though real-world browser support varies
-    // (older browsers can throw synchronously calling an API that doesn't exist), so both the
-    // missing-API and the user-cancelled cases fall back to the clipboard via try/catch.
+    const text = shareText(scoreBreakdown, endingTitle, initialEconomic, finalEconomic)
     try {
       navigator.share({ text }).then(
         () => { setShareStatus('shared') },
@@ -89,19 +86,8 @@ export function YearReportScreen({
     <div className="cr-screen">
       <div className="cr-page">
         <div>
-          <p className="cr-eyebrow">31 décembre 2027</p>
-          <h1 className="cr-title">BILAN — ANNÉE 1</h1>
-          {budgetEntry ? (
-            <span className={`cr-badge ${budgetEntry.status === 'ADOPTED' ? 'cr-badge--adopted' : 'cr-badge--rejected'}`}>
-              BUDGET {BILL_STATUS_LABEL[budgetEntry.status]}
-              {budgetEntry.usedExceptionalProcedure ? ' (responsabilité engagée)' : ''}
-            </span>
-          ) : null}
-          {discretionaryEntry ? (
-            <span className={`cr-badge ${discretionaryEntry.status === 'ADOPTED' ? 'cr-badge--adopted' : 'cr-badge--rejected'}`} style={{ marginLeft: '0.5rem' }}>
-              {discretionaryEntry.billTitle} — {BILL_STATUS_LABEL[discretionaryEntry.status]}
-            </span>
-          ) : null}
+          <p className="cr-eyebrow">Mai 2032</p>
+          <h1 className="cr-title">5 ANS PLUS TARD</h1>
         </div>
 
         <div className="cr-card cr-score">
@@ -124,20 +110,44 @@ export function YearReportScreen({
           {reportRow('Popularité', `${initialPopularity.toFixed(0)}%`, `${finalPopularity.toFixed(0)}%`)}
         </div>
 
-        <div className="cr-report-row">
-          <span className="cr-report-row__label">Capital politique restant</span>
-          <span className="cr-report-row__value">{politicalCapital} / 100</span>
+        <div className="cr-card">
+          <p className="cr-eyebrow">Détail du score</p>
+          {(Object.keys(SCORE_LABEL) as (keyof typeof SCORE_LABEL)[]).map((key) => (
+            <div className="cr-report-row" key={key}>
+              <span className="cr-report-row__label">{SCORE_LABEL[key]}</span>
+              <span className="cr-report-row__value">{scoreBreakdown[key].toFixed(0)} / 100</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="cr-card">
+          <p className="cr-eyebrow">Mes 5 engagements — bilan final</p>
+          <ul className="cr-promise-tracker__list">
+            {promiseResolutions.map((resolution) => {
+              const promise = getPromiseDefinition(resolution.promiseId)
+              return (
+                <li key={resolution.promiseId} className="cr-promise-tracker__item">
+                  <div className="cr-promise-tracker__head">
+                    <span>{promise.title}</span>
+                    <span
+                      className={`cr-indicator__trend cr-indicator__trend--${resolution.finalStatus === 'KEPT' ? 'up' : resolution.finalStatus === 'BROKEN' ? 'down' : 'neutral'}`}
+                    >
+                      {PROMISE_STATUS_LABEL[resolution.finalStatus]}
+                    </span>
+                  </div>
+                  <div className="cr-promise-tracker__progress">{resolution.progressLabel}</div>
+                </li>
+              )
+            })}
+          </ul>
         </div>
 
         <div className="cr-button-row">
-          <button type="button" className="cr-button cr-button--primary" onClick={onReplaySameSeed}>
-            REJOUER L’ANNÉE
-          </button>
-          <button type="button" className="cr-button cr-button--secondary" onClick={onNewGame}>
+          <button type="button" className="cr-button cr-button--primary" onClick={onNewGame}>
             NOUVELLE PARTIE
           </button>
           <button type="button" className="cr-button cr-button--secondary" onClick={handleShare}>
-            PARTAGER MON SCORE
+            PARTAGER MON MANDAT
           </button>
         </div>
         {shareStatus === 'copied' ? <p className="cr-small-text">Résultat copié dans le presse-papiers.</p> : null}

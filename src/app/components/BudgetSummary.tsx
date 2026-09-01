@@ -13,7 +13,7 @@ function rangeText(range: [number, number], decimals = 1, suffix = ''): string {
   return `${formatSigned(range[0], decimals, suffix)} à ${formatSigned(range[1], decimals, suffix)}`
 }
 
-/** The sticky live-updating summary panel — always visible while the player adjusts the budget (M2 §13). */
+/** The sticky live-updating summary panel — always visible while the player adjusts the budget (M2 §13, M5 §32). */
 export function BudgetSummary({ estimate, projectedRevenue, projectedSpending, projectedDeficitRatio }: BudgetSummaryProps) {
   const warning = BERCY_WARNING_COPY[estimate.warningLevel]
   const nextDeficitRatio = projectedDeficitRatio + (estimate.deficitRatioDeltaRange[0] + estimate.deficitRatioDeltaRange[1]) / 2
@@ -35,11 +35,15 @@ export function BudgetSummary({ estimate, projectedRevenue, projectedSpending, p
         </div>
         <div className="cr-summary__row">
           <dt>Dépenses projetées</dt>
-          <dd>{formatMdEuros(projectedSpending + estimate.netAnnualChange)}</dd>
+          <dd>{formatMdEuros(projectedSpending + estimate.totalAnnualLevel)}</dd>
         </div>
         <div className="cr-summary__row">
-          <dt>Changement net annuel</dt>
-          <dd>{formatSigned(estimate.netAnnualChange, 0, ' Md€/an')}</dd>
+          <dt>Stance budgétaire totale</dt>
+          <dd>{formatSigned(estimate.totalAnnualLevel, 0, ' Md€/an')}</dd>
+        </div>
+        <div className="cr-summary__row">
+          <dt>Changement vs politique actuelle</dt>
+          <dd>{formatSigned(estimate.netChangeFromCurrentPolicy, 0, ' Md€/an')}</dd>
         </div>
         <div className="cr-summary__row">
           <dt>Déficit projeté</dt>

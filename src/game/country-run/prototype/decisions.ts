@@ -70,53 +70,9 @@ export const BERCY_AUDIT: DecisionConfig = {
   ],
 }
 
-export const ENERGY_SHOCK: DecisionConfig = {
-  id: 'energy-shock',
-  title: 'LE PÉTROLE BONDIT DE 28 %',
-  text: 'Une crise internationale provoque une hausse brutale des prix de l’énergie. Les ménages et les entreprises commencent à ressentir le choc.',
-  shock: {
-    id: 'energy-shock-2027',
-    world: { oilPriceIndex: 28 },
-    directGrowthEffect: -0.3,
-    confidence: { consumerConfidence: -5, businessConfidence: -3 },
-  },
-  choices: [
-    {
-      id: 'energy-shield',
-      title: 'BOUCLIER ÉNERGÉTIQUE',
-      copy: 'Coût budgétaire annuel : environ +15 Md€.',
-      previews: [
-        { label: 'Pouvoir d’achat', direction: 'up' },
-        { label: 'Déficit', direction: 'up' },
-        { label: 'Impact inflation', direction: 'down' },
-        { label: 'Popularité', direction: 'up' },
-      ],
-      policyDelta: { transfersChanges: 15 },
-      popularityDelta: 3,
-    },
-    {
-      id: 'targeted-aid',
-      title: 'AIDE CIBLÉE',
-      copy: 'Coût budgétaire annuel : environ +6 Md€.',
-      previews: [
-        { label: 'Protection', direction: 'mixed' },
-        { label: 'Déficit', direction: 'up' },
-        { label: 'Popularité', direction: 'up' },
-      ],
-      policyDelta: { transfersChanges: 6 },
-      popularityDelta: 1.5,
-    },
-    {
-      id: 'let-prices-adjust',
-      title: 'LAISSER LES PRIX S’AJUSTER',
-      copy: 'Coût budgétaire : 0.',
-      previews: [
-        { label: 'Déficit', direction: 'neutral' },
-        { label: 'Pouvoir d’achat / inflation', direction: 'strongDown' },
-        { label: 'Popularité', direction: 'down' },
-        { label: 'Confiance des marchés', direction: 'up' },
-      ],
-      popularityDelta: -3,
-    },
-  ],
-}
+/**
+ * M5 §11: the old fixed "Energy Shock" pre-mandate decision is GONE from
+ * here — migrated into `events/eventCatalog.ts`'s `'energy-shock'` entry
+ * (a high-probability early-mandate event, turns 1-12) rather than kept
+ * duplicated in both places. See that file's header comment.
+ */

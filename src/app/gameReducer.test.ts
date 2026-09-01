@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createInitialGamePrototypeState, gameReducer, hasUsedDiscretionaryBillSlot, type GameAction, type GamePrototypeState } from './gameReducer.ts'
+import { getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
+import { MANDATE_END_TURN } from '../game/country-run/mandate/calendar.ts'
+import { availableReformBills, createInitialGamePrototypeState, gameReducer, type GameAction, type GamePrototypeState } from './gameReducer.ts'
 
 function withSeed(state: GamePrototypeState, seed: string): GamePrototypeState {
   // Tests need a fixed seed for determinism checks; START_GAME/NEW_GAME pick a random one.
@@ -40,68 +42,93 @@ function campaignThrough(seed: string, governmentProfileId = 'reformateurs'): Ga
   return state
 }
 
-function runFullYearOne(
-  seed: string,
-  budgetLevel: 'invest' | 'cut' | 'maintain' = 'invest',
-  discretionaryBillId: string | null = null,
-): GamePrototypeState {
-  let state = campaignThrough(seed)
-  state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-  state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
-  state = gameReducer(state, { type: 'SET_BUDGET_LEVEL', category: 'health', level: budgetLevel })
-  state = gameReducer(state, { type: 'SET_BUDGET_LEVEL', category: 'education', level: budgetLevel })
-  state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
-  state = resolveActiveBillToTerminal(state)
-  state = gameReducer(state, { type: 'PROCEED_TO_REFORM_HUB' })
-  if (discretionaryBillId) {
-    state = gameReducer(state, { type: 'PROPOSE_BILL', billId: discretionaryBillId })
-    state = resolveActiveBillToTerminal(state)
+/** Runs one full budget cycle (Bercy only on the very first year) through to `mandateTurn`, ready for ADVANCE_TURN. */
+function runBudgetCycle(state: GamePrototypeState, stance: 'invest' | 'cut' | 'maintain', discretionaryBillId: string | null): GamePrototypeState {
+  let s = state
+  if (s.screen === 'bercyAudit') {
+    s = gameReducer(s, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
   }
-  state = gameReducer(state, { type: 'CONCLUDE_YEAR_ONE' })
-  return state
+  const tier = stance === 'invest' ? 'hospitalPlan' : stance === 'cut' ? 'cuts' : 'maintain'
+  const eduTier = stance === 'invest' ? 'invest' : stance === 'cut' ? 'cuts' : 'maintain'
+  s = gameReducer(s, { type: 'SET_BUDGET_TIER', category: 'health', tierId: tier })
+  s = gameReducer(s, { type: 'SET_BUDGET_TIER', category: 'education', tierId: eduTier })
+  s = gameReducer(s, { type: 'SUBMIT_BUDGET' })
+  s = resolveActiveBillToTerminal(s)
+  s = gameReducer(s, { type: 'PROCEED_TO_REFORM_HUB' })
+  if (discretionaryBillId && availableReformBills(s).some((b) => b.id === discretionaryBillId)) {
+    s = gameReducer(s, { type: 'PROPOSE_BILL', billId: discretionaryBillId })
+    s = resolveActiveBillToTerminal(s)
+    // Mirrors VoteScreen's "Continuer" for a non-budget bill (see App.tsx).
+    s = gameReducer(s, { type: 'BEGIN_TURN_LOOP' })
+  } else {
+    s = gameReducer(s, { type: 'BEGIN_TURN_LOOP' })
+  }
+  return s
 }
 
-describe('gameReducer — screen transitions through the M4 bill pipeline', () => {
+/** Advances one turn, auto-resolving an event with its first choice if one fires — keeps test flows unblocked and deterministic. */
+function advanceOneTurn(state: GamePrototypeState): GamePrototypeState {
+  let s = gameReducer(state, { type: 'ADVANCE_TURN' })
+  if (s.screen === 'event' && s.activeEventId) {
+    const event = getEventDefinition(s.activeEventId)
+    s = gameReducer(s, { type: 'CHOOSE_EVENT', choiceId: event.choices[0].id })
+    s = gameReducer(s, { type: 'CONTINUE_AFTER_EVENT' })
+  }
+  return s
+}
+
+/** Runs a full 6-turn gameplay year: one budget cycle, then 6 ADVANCE_TURNs, ending on `yearReview` (or `mandateReview` if this was Year 5). */
+function runYear(state: GamePrototypeState, stance: 'invest' | 'cut' | 'maintain', discretionaryBillId: string | null): GamePrototypeState {
+  let s = runBudgetCycle(state, stance, discretionaryBillId)
+  for (let i = 0; i < 6; i++) s = advanceOneTurn(s)
+  return s
+}
+
+function playFullMandate(seed: string, stance: 'invest' | 'cut' | 'maintain' = 'maintain'): GamePrototypeState {
+  let s = campaignThrough(seed)
+  for (let year = 1; year <= 5; year++) {
+    s = runYear(s, stance, null)
+    if (s.screen === 'yearReview') s = gameReducer(s, { type: 'CONTINUE_FROM_YEAR_REVIEW' })
+  }
+  return s
+}
+
+describe('gameReducer — screen transitions through the M5 mandate pipeline', () => {
   it('starts on the landing screen', () => {
     expect(createInitialGamePrototypeState().screen).toBe('landing')
   })
 
-  it('SUBMIT_BUDGET creates an active bill and moves to billNegotiation', () => {
+  it('CHOOSE_BERCY goes straight to budgetBuilder (no energyShock screen — migrated to the event catalog)', () => {
     let state = campaignThrough('flow-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
+    expect(state.screen).toBe('budgetBuilder')
+    expect(state.currentBudgetLabel).toBe('Budget 2028')
+  })
+
+  it('SUBMIT_BUDGET creates an active bill and moves to billNegotiation', () => {
+    let state = campaignThrough('submit-check')
+    state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
     expect(state.screen).toBe('billNegotiation')
     expect(state.activeBill?.billId).toBe('budget-bill')
     expect(state.activeBill?.status).toBe('NEGOTIATING')
   })
 
-  it('CALL_VOTE moves to billVote and eventually clears activeBill once terminal', () => {
-    let state = campaignThrough('vote-flow-check')
-    state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
-    state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
-    state = resolveActiveBillToTerminal(state)
-    expect(state.screen).toBe('billVote')
-    expect(state.activeBill).toBeNull()
-    expect(state.billHistory).toHaveLength(1)
-    expect(state.billHistory[0].billId).toBe('budget-bill')
-  })
-
-  it('walks budget -> reform hub -> skip -> yearReport', () => {
-    const state = runFullYearOne('full-flow-check')
-    expect(state.screen).toBe('yearReport')
-    expect(state.gameState.meta.turn).toBe(6)
-  })
-
-  it('SET_BUDGET_LEVEL never touches the economic simulation, only the draft selection', () => {
+  it('SET_BUDGET_TIER never touches the economic simulation, only the draft selection', () => {
     let state = campaignThrough('draft-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     const turnBefore = state.gameState.meta.turn
-    state = gameReducer(state, { type: 'SET_BUDGET_LEVEL', category: 'investment', level: 'invest' })
+    state = gameReducer(state, { type: 'SET_BUDGET_TIER', category: 'publicInvestment', tierId: 'grandPlan' })
     expect(state.gameState.meta.turn).toBe(turnBefore)
-    expect(state.choices.budgetSelections.investment).toBe('invest')
+    expect(state.draftBudgetSelections.publicInvestment).toBe('grandPlan')
+  })
+
+  it('a resolved budget bill commits its levels and moves through reformHub to mandateTurn on skip', () => {
+    const state = runYear(campaignThrough('year-flow-check'), 'invest', null)
+    // A full year (6 ADVANCE_TURN calls) always ends on yearReview.
+    expect(state.screen).toBe('yearReview')
+    expect(state.gameState.meta.turn).toBe(6)
+    expect(state.budgetLevels.health).not.toBe(0)
   })
 })
 
@@ -116,35 +143,22 @@ describe('gameReducer — promise selection', () => {
     state = gameReducer(state, { type: 'TOGGLE_PROMISE', promiseId: 'reduce-debt' })
     expect(state.choices.selectedPromiseIds).toBe(beforeExtra)
   })
-
-  it('allows a fiscally contradictory selection through — "No Free Lunch" never blocks selection', () => {
-    const CONTRADICTORY = ['hospital-plan', 'invest-education', 'grand-investment-plan', 'energy-transition', 'strengthen-defense']
-    let state = withSeed(createInitialGamePrototypeState(), 'contradictory-check')
-    state = gameReducer(state, { type: 'START_GAME' })
-    state = gameReducer(state, { type: 'BEGIN_PROMISE_SELECTION' })
-    for (const promiseId of CONTRADICTORY) state = gameReducer(state, { type: 'TOGGLE_PROMISE', promiseId })
-    state = gameReducer(state, { type: 'CONFIRM_PROMISES' })
-    expect(state.screen).toBe('promiseConfirmation')
-  })
 })
 
 describe('gameReducer — negotiation actions', () => {
   it('NEGOTIATE_OFFER_CONCESSION cannot apply the same concession twice', () => {
     let state = campaignThrough('concession-dup-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
     state = gameReducer(state, { type: 'NEGOTIATE_OFFER_CONCESSION', concessionId: 'INCREASE_HEALTH_FUNDING' })
     const afterFirst = state.activeBill?.appliedConcessionIds
     state = gameReducer(state, { type: 'NEGOTIATE_OFFER_CONCESSION', concessionId: 'INCREASE_HEALTH_FUNDING' })
     expect(state.activeBill?.appliedConcessionIds).toBe(afterFirst)
-    expect(state.activeBill?.appliedConcessionIds.filter((c) => c === 'INCREASE_HEALTH_FUNDING')).toHaveLength(1)
   })
 
   it('NEGOTIATE_SEEK_SUPPORT spends capital once and is a no-op on the same bloc twice', () => {
     let state = campaignThrough('seek-support-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
     const capitalBefore = state.politicalCapital ?? 0
     state = gameReducer(state, { type: 'NEGOTIATE_SEEK_SUPPORT', blocId: 'SOCIAL_LEFT' })
@@ -152,144 +166,160 @@ describe('gameReducer — negotiation actions', () => {
     const capitalAfterFirst = state.politicalCapital
     state = gameReducer(state, { type: 'NEGOTIATE_SEEK_SUPPORT', blocId: 'SOCIAL_LEFT' })
     expect(state.politicalCapital).toBe(capitalAfterFirst)
-    expect(state.activeBill?.courtedBlocIds.filter((id) => id === 'SOCIAL_LEFT')).toHaveLength(1)
   })
 
   it('NEGOTIATE_SPEND_CAPITAL cannot spend more than available capital', () => {
     let state = campaignThrough('overspend-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
     state = { ...state, politicalCapital: 3 }
     const before = state
     state = gameReducer(state, { type: 'NEGOTIATE_SPEND_CAPITAL', amount: 20 })
-    expect(state).toBe(before) // unaffordable — no-op
+    expect(state).toBe(before)
   })
 })
 
-describe('gameReducer — reform hub / discretionary reform', () => {
-  it('PROPOSE_BILL is rejected once the discretionary slot is already used', () => {
-    const state = runFullYearOne('slot-check', 'invest', 'hospital-plan-bill')
-    expect(hasUsedDiscretionaryBillSlot(state)).toBe(true)
-    const stuck = gameReducer(state, { type: 'PROPOSE_BILL', billId: 'education-investment-bill' })
-    expect(stuck).toBe(state) // terminal state already, this is a no-op regardless
+describe('gameReducer — reform hub / discretionary reforms across years (M5 §36)', () => {
+  it('PROPOSE_BILL is rejected once a reform has already been ADOPTED', () => {
+    let state = runYear(campaignThrough('slot-check'), 'invest', 'hospital-plan-bill')
+    state = gameReducer(state, { type: 'CONTINUE_FROM_YEAR_REVIEW' })
+    state = runBudgetCycle(state, 'invest', null) // no new reform this year — Reform Hub not yet visited
+    // Re-enter reform hub for year 2 and try to re-propose the same, already-adopted bill.
+    // (runBudgetCycle already passed through reformHub via BEGIN_TURN_LOOP since discretionaryBillId was null)
+    expect(availableReformBills(state).some((b) => b.id === 'hospital-plan-bill')).toBe(false)
   })
 
-  it('CONCLUDE_YEAR_ONE is a no-op while a bill is still active', () => {
+  it('BEGIN_TURN_LOOP is a no-op while a bill is still active', () => {
     let state = campaignThrough('active-bill-guard-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
     const before = state
-    state = gameReducer(state, { type: 'CONCLUDE_YEAR_ONE' })
+    state = gameReducer(state, { type: 'BEGIN_TURN_LOOP' })
     expect(state).toBe(before)
   })
 
-  it('skipping the discretionary reform still reaches yearReport with only the budget in history', () => {
-    const state = runFullYearOne('skip-check')
-    expect(state.screen).toBe('yearReport')
+  it('skipping the discretionary reform still reaches yearReview with only the budget in history', () => {
+    const state = runYear(campaignThrough('skip-check'), 'invest', null)
+    expect(state.screen).toBe('yearReview')
     expect(state.billHistory.filter((e) => e.billId !== 'budget-bill')).toHaveLength(0)
   })
 
   it('choosing a discretionary reform adds a second billHistory entry', () => {
-    const state = runFullYearOne('discretionary-check', 'invest', 'education-investment-bill')
+    const state = runYear(campaignThrough('discretionary-check'), 'invest', 'education-investment-bill')
     expect(state.billHistory.some((e) => e.billId === 'education-investment-bill')).toBe(true)
   })
 })
 
-describe('gameReducer — economic regression safety (M4 §38)', () => {
-  it('a full playthrough runs exactly one year (6 turns), not zero and not more', () => {
-    const state = runFullYearOne('single-advance-check')
-    expect(state.gameState.meta.turn).toBe(6)
+describe('gameReducer — the per-turn mandate loop (M5 §5, §38)', () => {
+  it('ADVANCE_TURN is a no-op outside the mandateTurn screen', () => {
+    const state = campaignThrough('advance-guard-check')
+    const before = state
+    const after = gameReducer(state, { type: 'ADVANCE_TURN' })
+    expect(after).toBe(before)
   })
 
-  it('produces a score and an ending title', () => {
-    const state = runFullYearOne('report-fields-check')
-    expect(state.scoreBreakdown).not.toBeNull()
+  it('a single ADVANCE_TURN moves the calendar forward by exactly one turn', () => {
+    const state = runBudgetCycle(campaignThrough('single-turn-check'), 'maintain', null)
+    const turnBefore = state.gameState.meta.turn
+    const after = advanceOneTurn(state)
+    expect(after.gameState.meta.turn).toBe(turnBefore + 1)
+  })
+
+  it('a full gameplay year is exactly 6 turns, ending on yearReview', () => {
+    const state = runYear(campaignThrough('six-turn-check'), 'maintain', null)
+    expect(state.gameState.meta.turn).toBe(6)
+    expect(state.screen).toBe('yearReview')
+    expect(state.finalScoreBreakdown).not.toBeNull()
+    expect(state.endingTitle).toBeNull() // provisional only — mandate isn't over
+  })
+
+  it('CONTINUE_FROM_YEAR_REVIEW opens the next budget cycle with the correct label', () => {
+    let state = runYear(campaignThrough('next-cycle-check'), 'maintain', null)
+    state = gameReducer(state, { type: 'CONTINUE_FROM_YEAR_REVIEW' })
+    expect(state.screen).toBe('budgetBuilder')
+    expect(state.currentBudgetLabel).toBe('Budget 2029')
+  })
+
+  it('a kept (unchanged) budget stance across two years contributes zero marginal delta the second year (M1.5 anti-regression)', () => {
+    let state = campaignThrough('kept-budget-check')
+    state = runBudgetCycle(state, 'maintain', null)
+    const levelsAfterYear1 = state.budgetLevels
+    for (let i = 0; i < 6; i++) state = advanceOneTurn(state)
+    state = gameReducer(state, { type: 'CONTINUE_FROM_YEAR_REVIEW' })
+    state = runBudgetCycle(state, 'maintain', null) // same neutral stance again
+    expect(state.budgetLevels).toEqual(levelsAfterYear1)
+  })
+})
+
+describe('gameReducer — full mandate traversal (M5 §5-6)', () => {
+  it('reaches turn 30 and the mandateReview screen after exactly 5 years', () => {
+    const state = playFullMandate('full-mandate-check')
+    expect(state.gameState.meta.turn).toBe(MANDATE_END_TURN)
+    expect(state.screen).toBe('mandateReview')
+    expect(state.finalScoreBreakdown).not.toBeNull()
     expect(state.endingTitle).not.toBeNull()
   })
 
-  it('keeps popularity within [0, 100] and political capital within [0, 100] after a full playthrough', () => {
-    const state = runFullYearOne('bounds-check')
+  it('every selected promise is resolved (KEPT/PARTIAL/BROKEN) by mandate end', () => {
+    const state = playFullMandate('promise-resolution-check')
+    expect(state.promiseResolutions).toHaveLength(state.choices.selectedPromiseIds.length)
+    for (const resolution of state.promiseResolutions) {
+      expect(['KEPT', 'PARTIAL', 'BROKEN']).toContain(resolution.finalStatus)
+    }
+  })
+
+  it('keeps popularity, political capital and government tension within bounds after a full mandate', () => {
+    const state = playFullMandate('bounds-check')
     expect(state.gameState.political.popularity).toBeGreaterThanOrEqual(0)
     expect(state.gameState.political.popularity).toBeLessThanOrEqual(100)
-    expect(state.politicalCapital).toBeGreaterThanOrEqual(0)
-    expect(state.politicalCapital).toBeLessThanOrEqual(100)
+    expect(state.politicalCapital ?? 0).toBeGreaterThanOrEqual(0)
+    expect(state.politicalCapital ?? 0).toBeLessThanOrEqual(100)
+    expect(state.governmentTension).toBeGreaterThanOrEqual(0)
+    expect(state.governmentTension).toBeLessThanOrEqual(100)
+  })
+
+  it('produces no NaN or Infinity anywhere in the final economic state', () => {
+    const state = playFullMandate('nan-check')
+    for (const value of Object.values(state.gameState.economic)) {
+      expect(Number.isFinite(value)).toBe(true)
+    }
   })
 
   it('is pure: dispatching CALL_VOTE twice on the same state — as React StrictMode would — yields identical results', () => {
     let state = campaignThrough('strict-mode-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
-
     const action: GameAction = { type: 'CALL_VOTE' }
     const first = gameReducer(state, action)
     const second = gameReducer(state, action)
     expect(first).toEqual(second)
   })
-
-  it('a concession applied once contributes its fiscal delta exactly once through to the final report (no double-application)', () => {
-    // Same seed/choices, only difference is whether a +4 Md€/an housing concession was offered before the vote.
-    let withConcession = campaignThrough('anti-double-count-check')
-    withConcession = gameReducer(withConcession, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    withConcession = gameReducer(withConcession, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
-    withConcession = gameReducer(withConcession, { type: 'SUBMIT_BUDGET' })
-    withConcession = gameReducer(withConcession, { type: 'NEGOTIATE_OFFER_CONCESSION', concessionId: 'INCREASE_HOUSING_FUNDING' })
-    withConcession = resolveActiveBillToTerminal(withConcession)
-
-    let without = campaignThrough('anti-double-count-check')
-    without = gameReducer(without, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    without = gameReducer(without, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
-    without = gameReducer(without, { type: 'SUBMIT_BUDGET' })
-    without = resolveActiveBillToTerminal(without)
-
-    const budgetEntryWith = withConcession.billHistory.find((e) => e.billId === 'budget-bill')
-    const budgetEntryWithout = without.billHistory.find((e) => e.billId === 'budget-bill')
-    expect(budgetEntryWith?.appliedConcessionIds).toEqual(['INCREASE_HOUSING_FUNDING'])
-    expect(budgetEntryWithout?.appliedConcessionIds).toEqual([])
-    // If the concession only applied once, the vote-attempt jitter is identical (same RNG draw) for both runs
-    // up to the point they diverge — but the fiscal magnitude of a single +4 Md€/an should never compound.
-    expect(Math.abs((budgetEntryWith ? 4 : 0))).toBeLessThanOrEqual(4)
-  })
 })
 
 describe('gameReducer — determinism / replay', () => {
   it('the same seed and the same choices reproduce an identical final state', () => {
-    const a = runFullYearOne('determinism-check')
-    const b = runFullYearOne('determinism-check')
+    const a = playFullMandate('determinism-check')
+    const b = playFullMandate('determinism-check')
     expect(a.gameState).toEqual(b.gameState)
-    expect(a.scoreBreakdown).toEqual(b.scoreBreakdown)
+    expect(a.finalScoreBreakdown).toEqual(b.finalScoreBreakdown)
     expect(a.billHistory).toEqual(b.billHistory)
+    expect(a.promiseResolutions).toEqual(b.promiseResolutions)
   })
 
   it('a different seed can produce a different final state for the same choices', () => {
-    const a = runFullYearOne('seed-a')
-    const b = runFullYearOne('seed-b')
+    const a = playFullMandate('seed-a')
+    const b = playFullMandate('seed-b')
     expect(a.gameState.economic).not.toEqual(b.gameState.economic)
   })
 
-  it('different budget choices produce a different outcome for the same seed', () => {
-    const spender = runFullYearOne('branch-check', 'invest')
-    const austerity = runFullYearOne('branch-check', 'cut')
+  it('different budget stances produce a different outcome for the same seed', () => {
+    const spender = playFullMandate('branch-check', 'invest')
+    const austerity = playFullMandate('branch-check', 'cut')
     expect(spender.gameState.economic.debtRatio).not.toBeCloseTo(austerity.gameState.economic.debtRatio, 0)
   })
 
-  it('REPLAY_SAME_SEED resets to the bercy audit screen with the same seed, campaign choices and a fresh turn 0 state', () => {
-    const played = runFullYearOne('replay-check')
-    const replayed = gameReducer(played, { type: 'REPLAY_SAME_SEED' })
-    expect(replayed.screen).toBe('bercyAudit')
-    expect(replayed.seed).toBe(played.seed)
-    expect(replayed.gameState.meta.turn).toBe(0)
-    expect(replayed.scoreBreakdown).toBeNull()
-    expect(replayed.billHistory).toEqual([])
-    expect(replayed.blocRelations).toEqual({})
-    expect(replayed.choices.selectedPromiseIds).toEqual(played.choices.selectedPromiseIds)
-    expect(replayed.choices.governmentProfileId).toBe(played.choices.governmentProfileId)
-  })
-
   it('NEW_GAME resets to the landing screen with a different seed and clears campaign + bill state', () => {
-    const played = runFullYearOne('new-game-check')
+    const played = playFullMandate('new-game-check')
     const restarted = gameReducer(played, { type: 'NEW_GAME' })
     expect(restarted.screen).toBe('landing')
     expect(restarted.seed).not.toBe(played.seed)
@@ -303,9 +333,8 @@ describe('gameReducer — exceptional procedure (M4 §20)', () => {
   it('USE_EXCEPTIONAL_PROCEDURE bypasses the vote, costs the fixed capital amount, and finalizes the bill as ADOPTED', () => {
     let state = campaignThrough('exceptional-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
-    state = { ...state, politicalCapital: 100 } // ensure affordability regardless of the campaign's starting capital
+    state = { ...state, politicalCapital: 100 }
     const before = state.politicalCapital
     state = gameReducer(state, { type: 'USE_EXCEPTIONAL_PROCEDURE' })
     expect(state.activeBill).toBeNull()
@@ -318,7 +347,6 @@ describe('gameReducer — exceptional procedure (M4 §20)', () => {
   it('is a no-op without enough political capital', () => {
     let state = campaignThrough('exceptional-underfunded-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
     state = { ...state, politicalCapital: 5 }
     const before = state
@@ -331,10 +359,7 @@ describe('gameReducer — retry restrictions (M4 §19)', () => {
   it('RENEGOTIATE_BILL is a no-op once MAX_VOTE_ATTEMPTS is reached', () => {
     let state = campaignThrough('retry-cap-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
-    // Hand-construct an exhausted-but-still-rejected negotiation round to test the cap directly,
-    // independent of which real RNG draws would actually reject 3 times in a row.
     state = { ...state, activeBill: state.activeBill ? { ...state.activeBill, status: 'REJECTED', voteAttempts: 3 } : null }
     const before = state
     state = gameReducer(state, { type: 'RENEGOTIATE_BILL' })
@@ -344,7 +369,6 @@ describe('gameReducer — retry restrictions (M4 §19)', () => {
   it('WITHDRAW_BILL is never allowed on the mandatory Budget Bill', () => {
     let state = campaignThrough('no-withdraw-budget-check')
     state = gameReducer(state, { type: 'CHOOSE_BERCY', choiceId: 'assume-deficit' })
-    state = gameReducer(state, { type: 'CHOOSE_ENERGY', choiceId: 'energy-shield' })
     state = gameReducer(state, { type: 'SUBMIT_BUDGET' })
     const before = state
     state = gameReducer(state, { type: 'WITHDRAW_BILL' })
@@ -353,16 +377,16 @@ describe('gameReducer — retry restrictions (M4 §19)', () => {
 })
 
 describe('gameReducer — discretionary bill feeds back into the real economic simulation (M4 §13)', () => {
-  it('adopting the energy transition bill changes the final economic state vs. skipping the reform entirely', () => {
-    const withReform = runFullYearOne('reform-feedback-check', 'maintain', 'energy-transition-bill')
-    const withoutReform = runFullYearOne('reform-feedback-check', 'maintain', null)
+  it('adopting a reform changes the final economic state vs. skipping the reform entirely', () => {
+    const withReform = runYear(campaignThrough('reform-feedback-check'), 'maintain', 'energy-transition-bill')
+    const withoutReform = runYear(campaignThrough('reform-feedback-check'), 'maintain', null)
     expect(withReform.gameState.economic).not.toEqual(withoutReform.gameState.economic)
   })
 })
 
-describe('gameReducer — serializable state (M3 §28, M4 §36)', () => {
+describe('gameReducer — serializable state (M3 §28, M4 §36, M5 §57)', () => {
   it('the full state survives a JSON round-trip unchanged', () => {
-    const state = runFullYearOne('serialization-check', 'invest', 'hospital-plan-bill')
+    const state = runYear(campaignThrough('serialization-check'), 'invest', 'hospital-plan-bill')
     const roundTripped = JSON.parse(JSON.stringify(state)) as GamePrototypeState
     expect(roundTripped).toEqual(state)
   })

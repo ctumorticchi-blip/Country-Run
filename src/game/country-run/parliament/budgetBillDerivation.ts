@@ -1,58 +1,72 @@
 import { BUDGET_CATEGORY_ORDER } from '../budget/budgetCategories.ts'
-import { budgetSelectionsToPolicyDelta, computeNetAnnualChange } from '../budget/budgetEffects.ts'
-import type { BudgetSelections } from '../budget/budgetTypes.ts'
+import { budgetLevelsToPolicyInput, netChangeFromCurrentPolicy } from '../budget/budgetEffects.ts'
+import type { BudgetLevels } from '../budget/budgetTypes.ts'
 import { ABSOLUTE_MAJORITY } from '../prototype/parliament.ts'
 import type { PoliticalBillDefinition } from './billTypes.ts'
-import type { PolicyAffinity } from './politicalTypes.ts'
+import type { PolicyAffinity, PolicyDimension } from './politicalTypes.ts'
 
 export const BUDGET_BILL_ID = 'budget-bill'
 
 /** Md€/year magnitude beyond which the net budget stance alone starts meaningfully swaying fiscal-discipline-sensitive blocs. */
 const FISCAL_DISCIPLINE_SCALE = 40
+/** A category's own level, scaled to roughly [-1, 1] against its typical tier magnitude, for the affinity dot product. */
+const CATEGORY_TAG_SCALE = 12
 
 function clamp11(value: number): number {
   return Math.min(1, Math.max(-1, value))
 }
 
-function addTag(tags: PolicyAffinity, dimension: keyof PolicyAffinity, delta: number): void {
+function addTag(tags: PolicyAffinity, dimension: PolicyDimension, delta: number): void {
   tags[dimension] = clamp11((tags[dimension] ?? 0) + delta)
 }
 
-/** Each category's level shifts its own dimension, and the overall net change shifts `fiscalDiscipline` — a big spender reads as bad for discipline-sensitive blocs even before per-category reactions (M4 §22). */
-function deriveBudgetPolicyTags(selections: BudgetSelections, netAnnualChange: number): PolicyAffinity {
-  const tags: PolicyAffinity = { fiscalDiscipline: clamp11(-netAnnualChange / FISCAL_DISCIPLINE_SCALE) }
+/** Each category's ABSOLUTE stance shifts its own dimension (blocs react to where policy currently stands, not just this cycle's move), and the overall net level shifts `fiscalDiscipline` — a big spender reads as bad for discipline-sensitive blocs (M4 §22, extended to 7 categories in M5 §30). */
+function deriveBudgetPolicyTags(levels: BudgetLevels, totalLevel: number): PolicyAffinity {
+  const tags: PolicyAffinity = { fiscalDiscipline: clamp11(-totalLevel / FISCAL_DISCIPLINE_SCALE) }
+  const sign = (level: number) => clamp11(level / CATEGORY_TAG_SCALE)
 
-  const levelSign: Record<'cut' | 'maintain' | 'invest', number> = { cut: -0.6, maintain: 0, invest: 0.6 }
-  addTag(tags, 'health', levelSign[selections.health])
-  addTag(tags, 'publicSpending', levelSign[selections.health] * 0.3)
-  addTag(tags, 'education', levelSign[selections.education])
-  addTag(tags, 'publicInvestment', levelSign[selections.investment])
-  addTag(tags, 'publicSpending', levelSign[selections.investment] * 0.3)
-  addTag(tags, 'defense', levelSign[selections.defense])
+  addTag(tags, 'health', sign(levels.health))
+  addTag(tags, 'publicSpending', sign(levels.health) * 0.3)
+  addTag(tags, 'education', sign(levels.education))
+  addTag(tags, 'publicInvestment', sign(levels.publicInvestment))
+  addTag(tags, 'publicSpending', sign(levels.publicInvestment) * 0.3)
+  addTag(tags, 'defense', sign(levels.defense))
+  addTag(tags, 'housing', sign(levels.housingTerritories))
+  addTag(tags, 'publicSpending', sign(levels.housingTerritories) * 0.2)
+  addTag(tags, 'environment', sign(levels.greenTransition))
+  addTag(tags, 'publicInvestment', sign(levels.greenTransition) * 0.3)
+  addTag(tags, 'fiscalDiscipline', -sign(levels.administrationEfficiency) * 0.5)
+  addTag(tags, 'publicSpending', sign(levels.administrationEfficiency) * 0.3)
 
   return tags
 }
 
 /**
- * Derives the year's mandatory Budget Bill from the player's ACTUAL Budget
- * Builder choices (M4 §21-22) — replacing M2's fixed negotiate/maintain/
- * concede vote. Every field is a pure function of `selections`; nothing
- * here is stored, so re-deriving it after a `SET_BUDGET_LEVEL` always
- * reflects the current draft with no stale copy to desync.
+ * Derives THIS budget cycle's mandatory Budget Bill from the player's
+ * ACTUAL Budget Builder choices (M4 §21-22, M5 §28-29) — `newLevels` is
+ * the FULL absolute policy stance (fed to the engine as-is; the engine's
+ * own `computePolicyDelta` handles turning consecutive absolute totals
+ * into a one-time delta, never re-adding a sustained level), while
+ * `fiscalCost` reports the MARGINAL change from `previousLevels` — "what's
+ * actually being decided this cycle" for display and controversy. Every
+ * field is a pure function of its inputs; nothing here is stored, so
+ * re-deriving it after a `SET_BUDGET_TIER` always reflects the current
+ * draft with no stale copy to desync.
  */
-export function deriveBudgetBill(selections: BudgetSelections): PoliticalBillDefinition {
-  const economicPolicyEffect = budgetSelectionsToPolicyDelta(selections)
-  const fiscalCost = computeNetAnnualChange(selections)
-  const extremeCount = BUDGET_CATEGORY_ORDER.filter((id) => selections[id] !== 'maintain').length
-  const controversy = Math.min(1, 0.1 + extremeCount * 0.12 + Math.abs(fiscalCost) / 60)
+export function deriveBudgetBill(newLevels: BudgetLevels, previousLevels: BudgetLevels, budgetLabel: string): PoliticalBillDefinition {
+  const economicPolicyEffect = budgetLevelsToPolicyInput(newLevels)
+  const netChange = netChangeFromCurrentPolicy(newLevels, previousLevels)
+  const totalLevel = BUDGET_CATEGORY_ORDER.reduce((sum, id) => sum + newLevels[id], 0)
+  const changedCount = BUDGET_CATEGORY_ORDER.filter((id) => newLevels[id] !== previousLevels[id]).length
+  const controversy = Math.min(1, 0.1 + changedCount * 0.1 + Math.abs(netChange) / 60)
 
   return {
     id: BUDGET_BILL_ID,
-    title: 'BUDGET 2028',
+    title: budgetLabel,
     description: 'Le budget annuel de l’État — le vote parlementaire le plus important de l’année.',
-    policyTags: deriveBudgetPolicyTags(selections, fiscalCost),
+    policyTags: deriveBudgetPolicyTags(newLevels, totalLevel),
     economicPolicyEffect,
-    fiscalCost,
+    fiscalCost: netChange,
     reformIntensity: 0.2,
     controversy,
     promiseLinks: [],

@@ -1,14 +1,34 @@
 import { DEFAULT_ECONOMIC_ENGINE_CONFIG } from '../engine/economy/config/defaultConfig.ts'
 import { applyEffect } from '../engine/effects/apply.ts'
-import type { EconomicPolicyInput, ExternalShock, WorldState } from '../engine/economy/types.ts'
+import { NEUTRAL_POLICY_INPUT, type EconomicPolicyInput, type WorldState } from '../engine/economy/types.ts'
 import type { EconomicState, GameState } from '../engine/state/gameState.ts'
-import { BUDGET_CATEGORIES, BUDGET_CATEGORY_ORDER } from '../game/country-run/budget/budgetCategories.ts'
-import { NEUTRAL_BUDGET_SELECTIONS, type BudgetCategoryId, type BudgetLevel } from '../game/country-run/budget/budgetTypes.ts'
+import { BUDGET_CATEGORIES, BUDGET_CATEGORY_ORDER, getTier, NEUTRAL_BUDGET_LEVELS, NEUTRAL_BUDGET_SELECTIONS, selectionsFromLevels } from '../game/country-run/budget/budgetCategories.ts'
+import { budgetLevelsToPolicyInput, selectionsToLevels } from '../game/country-run/budget/budgetEffects.ts'
+import type { BudgetCategoryId, BudgetLevels, BudgetSelections } from '../game/country-run/budget/budgetTypes.ts'
 import { createInitialGameState } from '../game/country-run/data/initialState.ts'
 import { createInitialWorldState } from '../game/country-run/data/initialWorldState.ts'
-import { BERCY_AUDIT, ENERGY_SHOCK } from '../game/country-run/prototype/decisions.ts'
+import { budgetLabelForYearStartTurn } from '../game/country-run/mandate/calendar.ts'
+import { computeEconomicSentimentDelta } from '../game/country-run/mandate/economicSentiment.ts'
+import { recordSnapshot, snapshotFrom, type EconomicSnapshot } from '../game/country-run/mandate/economicSnapshots.ts'
+import { computeEndingTitle, computeFinalScore, type EndingTitle, type FinalScoreBreakdown } from '../game/country-run/mandate/finalScoring.ts'
+import {
+  applyTensionDelta,
+  tensionDeltaFromBrokenDeals,
+  tensionDeltaFromCompromise,
+  tensionDeltaFromVoteOutcome,
+} from '../game/country-run/mandate/governmentTensionV2.ts'
+import { computePopularityTurnDelta, popularityDeltaFromBillOutcome } from '../game/country-run/mandate/popularityV2.ts'
+import {
+  applyEventChoice,
+  applyEventWorldEffect,
+  applyYearEndDrift,
+  beginMandateTurn,
+  popularityDeltaFromNewPromiseResolutions,
+  turnTransitionFlags,
+  type MandatePolicyComponents,
+} from '../game/country-run/mandate/turnController.ts'
+import { BERCY_AUDIT } from '../game/country-run/prototype/decisions.ts'
 import { computeElectionResult, type ElectionResult } from '../game/country-run/prototype/electionResult.ts'
-import { COMPROMISE_SCALE_ON_REJECTION } from '../game/country-run/prototype/parliament.ts'
 import { generateParliamentComposition, type ParliamentComposition } from '../game/country-run/prototype/parliamentComposition.ts'
 import { appendPolicyHistory, type PolicyHistoryEntry } from '../game/country-run/prototype/policyHistory.ts'
 import {
@@ -17,44 +37,38 @@ import {
   clampPoliticalCapital,
   computeInitialPoliticalCapital,
   MAX_CAPITAL_SPEND_PER_ACTION,
-  politicalCapitalDeltaFromBillOutcome,
-  politicalCapitalDeltaFromYearEnd,
   spendCapital,
 } from '../game/country-run/prototype/politicalCapital.ts'
-import { popularityFromBudget, popularityFromParliamentOutcome, popularityFromYearEndOutcomes } from '../game/country-run/prototype/popularity.ts'
-import { computeEndingTitle, computeScore, type EndingTitle, type ScoreBreakdown } from '../game/country-run/prototype/scoring.ts'
 import type { DecisionConfig, PlayerChoices, ScreenId } from '../game/country-run/prototype/types.ts'
-import { mergePolicyDeltas, scalePolicyInput, simulateYearOne } from '../game/country-run/prototype/yearOneFlow.ts'
 import {
-  applyExecutionScaling,
   applyPopularityResilience,
   deriveGovernmentEngineConfig,
   governmentMarketConfidenceNudge,
 } from '../game/country-run/government/governmentEffects.ts'
 import { getGovernmentProfile } from '../game/country-run/government/governmentProfiles.ts'
 import type { GovernmentModifiers } from '../game/country-run/government/governmentTypes.ts'
+import { EVENT_CATALOG, getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
+import type { EventChoice, EventDefinition } from '../game/country-run/events/eventTypes.ts'
 import { getBlocDefinition } from '../game/country-run/parliament/blocDefinitions.ts'
 import { adjustRelation, RELATIONSHIP_EFFECTS, type BlocRelations } from '../game/country-run/parliament/blocRelations.ts'
 import { BUDGET_BILL_ID, deriveBudgetBill } from '../game/country-run/parliament/budgetBillDerivation.ts'
-import { getBillDefinition } from '../game/country-run/parliament/bills.ts'
+import { BILL_CATALOG, getBillDefinition } from '../game/country-run/parliament/bills.ts'
 import type { ActiveBillState, BillHistoryEntry, PoliticalBillDefinition } from '../game/country-run/parliament/billTypes.ts'
 import { MAX_VOTE_ATTEMPTS } from '../game/country-run/parliament/billTypes.ts'
 import { addConcession, applyConcessionsToBill, type EffectiveBill } from '../game/country-run/parliament/concessions.ts'
-import {
-  applyExceptionalProcedure,
-  blocsHostileToProcedure,
-  canUseExceptionalProcedure,
-  clampGovernmentTension,
-} from '../game/country-run/parliament/exceptionalProcedure.ts'
+import { applyExceptionalProcedure, blocsHostileToProcedure, canUseExceptionalProcedure } from '../game/country-run/parliament/exceptionalProcedure.ts'
+import { scheduleImplementation, type ScheduledImplementation } from '../game/country-run/parliament/implementationSchedule.ts'
 import { createDeal, markDealFulfilled, type PoliticalDeal } from '../game/country-run/parliament/politicalDeal.ts'
 import type { ConcessionType } from '../game/country-run/parliament/politicalTypes.ts'
 import { estimateBillSupport } from '../game/country-run/parliament/supportEstimate.ts'
 import { resolveVote, type VoteResult } from '../game/country-run/parliament/voteResolution.ts'
+import { PROMISE_CATALOG } from '../game/country-run/promises/promiseCatalog.ts'
+import { resolveDuePromises, type PromiseResolution } from '../game/country-run/promises/promiseResolution.ts'
 import { coherenceScore, isCompleteSelection, REQUIRED_PROMISE_COUNT } from '../game/country-run/promises/promiseSelection.ts'
-import type { PromiseCategory } from '../game/country-run/promises/promiseTypes.ts'
+import type { PromiseCategory, PromiseEvaluationContext } from '../game/country-run/promises/promiseTypes.ts'
 
-/** Bumped whenever the serialized shape of `GamePrototypeState` changes; no migration logic exists yet. */
-export const GAME_VERSION = '0.4.0'
+/** Bumped whenever the serialized shape of `GamePrototypeState` changes; no migration logic exists yet — an incompatible save fails safely to a new game (see save.ts). */
+export const GAME_VERSION = '0.5.0'
 
 /** Flat capital cost of a single SEEK_SUPPORT outreach action (M4 §12) — cheap relative to a full concession, so courting stays a real but minor lever. */
 export const SEEK_SUPPORT_CAPITAL_COST = 2
@@ -69,7 +83,7 @@ export const SEEK_SUPPORT_CAPITAL_COST = 2
  * `SeededRng` via `createActionRng` — never `Math.random()` — so the same
  * seed always replays identically (see rng.ts).
  */
-function generateSeed(): string {
+export function generateSeed(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return `seed-${String(Date.now())}-${String(Math.random()).slice(2)}`
 }
@@ -79,49 +93,72 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+/**
+ * The one-time-EVENT display data for the screen right after a year ends
+ * (M5 §51-52) — the same "derived data that genuinely can't be safely
+ * re-derived later" exception `lastVoteResult` already documents: a year's
+ * "NOTE DE MANDAT PROVISOIRE" must reflect political-capital/tension
+ * exactly as they stood at THAT year-end, not whatever they've drifted to
+ * by the time the player revisits the screen.
+ */
 export interface GamePrototypeState {
   screen: ScreenId
   seed: string
   gameVersion: string
   createdAt: string
-  /** Reflects the last full state (re)construction (new game / replay) — see nowIso()'s doc comment; not touched on every action, to keep the reducer pure. */
   updatedAt: string
   gameState: GameState
   worldState: WorldState
-  /** Captured once at game start (turn 0) — the fixed baseline the Year 1 report compares against. */
+  /** Captured once at mandate start (turn 0) — the fixed baseline every report compares against. */
   initialEconomicSnapshot: EconomicState
   initialPopularity: number
   choices: PlayerChoices
-  /** Computed once when the campaign reaches the election screen (M3 §4). */
   electionResult: ElectionResult | null
-  /** Computed once when a government profile is chosen (M3 §6-7). */
   parliamentComposition: ParliamentComposition | null
-  /** M3 §21 computed a starting value once; M4 §8-10 makes it a live, spendable/recoverable value for the rest of the run. */
   politicalCapital: number | null
-  /** M4 §14 — one signed score per bloc, nudged by concrete negotiation/vote outcomes. */
   blocRelations: BlocRelations
-  /** M4 §20 — architecture only this milestone (no government-collapse mechanic yet); tracked for a future confidence-vote system. */
   governmentTension: number
-  /** The bill currently being negotiated or just voted on, if any (M4 §5, §28 pipeline) — the ONLY bill-related runtime state; everything else about it is re-derived from its `billId` + this state (see `parliament/billTypes.ts`'s 3-layer split). */
   activeBill: ActiveBillState | null
-  /**
-   * The most recent `CALL_VOTE`'s resolved breakdown, for the vote screen
-   * to display — the one deliberate exception to "never store derived
-   * data" (M4 §36): a vote result is a genuine one-time EVENT (like M2's
-   * `scoreBreakdown`), and re-deriving it on demand isn't safe here since
-   * popularity (a support-formula input) is nudged immediately after the
-   * vote resolves, which would make a later recomputation diverge from
-   * what the vote actually used. Cleared whenever a new bill negotiation
-   * starts; `null` when the exceptional procedure bypassed voting entirely.
-   */
   lastVoteResult: VoteResult | null
-  /** Finalized bill outcomes (M4 §16, §36) — decisions/events, not economic snapshots. */
   billHistory: BillHistoryEntry[]
-  /** Struck negotiation agreements (M4 §15), visible in history. */
   politicalDeals: PoliticalDeal[]
-  /** Append-only log of meaningful policy decisions (M3 §24), read by promise evaluators — never itself mutated in place. */
   policyHistory: PolicyHistoryEntry[]
-  scoreBreakdown: ScoreBreakdown | null
+
+  /** Set once from the Bercy audit choice (M5 §11 keeps this the one fixed pre-mandate decision) — never changes again. */
+  bercyPolicyEffect: Partial<EconomicPolicyInput>
+  /** Accumulates permanently as scheduled bill/event implementations mature (M5 §38) — the ONLY mandate policy component stored as a running total; see turnController.ts's header for why that's safe. */
+  implementedReformPolicies: Partial<EconomicPolicyInput>
+  scheduledImplementations: ScheduledImplementation[]
+  /**
+   * The FULL merged policy actually fed to the engine on the last-played
+   * turn — MUST be threaded, never re-derived (see
+   * `turnController.ts`'s `BeginMandateTurnInput.previousMergedPolicy` doc
+   * comment): re-deriving it fresh from the current `budgetLevels` etc.
+   * would make a just-adopted budget invisible to the engine's own
+   * `computePolicyDelta`, the exact M1.5 bug class this field exists to
+   * avoid. `NEUTRAL_POLICY_INPUT` before the mandate's first turn.
+   */
+  lastMergedPolicyInput: EconomicPolicyInput
+  /** The PERSISTENT absolute budget stance (M5 §29) — re-derived to a policy input fresh every turn, never stored as one. */
+  budgetLevels: BudgetLevels
+  /** The in-progress Budget Builder draft (tier ids) — resets each budget cycle from `selectionsFromLevels(budgetLevels)`. */
+  draftBudgetSelections: BudgetSelections
+  /** Set when a budget cycle opens (e.g. "Budget 2028") — `null` only before the mandate's first cycle. */
+  currentBudgetLabel: string | null
+  /** ids of events already resolved this run — event eligibility never repeats a one-shot event (M5 §24). */
+  firedEventIds: string[]
+  /** The event currently awaiting the player's choice, if any (3-layer split: this is only a pointer into `EVENT_CATALOG`). */
+  activeEventId: string | null
+  lastEventChoice: { eventId: string; eventTitle: string; choiceId: string; immediateFeedback: string } | null
+  /** Frozen deadline outcomes (M5 §15-16) — see promiseResolution.ts; every selected promise is guaranteed one by mandate end. */
+  promiseResolutions: PromiseResolution[]
+  /** Compact, 30-max per-turn indicators (M5 §65) — never a full GameState duplicate. */
+  economicSnapshots: EconomicSnapshot[]
+  /** Popularity as of the start of the CURRENT gameplay year — the year-end drift's own baseline (M5 §20). */
+  popularityAtYearStart: number
+  /** The mandate's standing score — a genuine "NOTE DE MANDAT PROVISOIRE" at any `yearReview`, the true final score at `mandateReview` (same computation either way, M5 §61-63). */
+  finalScoreBreakdown: FinalScoreBreakdown | null
+  /** Only ever set at `mandateReview` — `null` at every `yearReview`, since the mandate's shape isn't final until turn 30. */
   endingTitle: EndingTitle | null
 }
 
@@ -138,8 +175,7 @@ export type GameAction =
   | { type: 'PROCEED_TO_MANDATE_START' }
   | { type: 'BEGIN_MANDATE' }
   | { type: 'CHOOSE_BERCY'; choiceId: string }
-  | { type: 'CHOOSE_ENERGY'; choiceId: string }
-  | { type: 'SET_BUDGET_LEVEL'; category: BudgetCategoryId; level: BudgetLevel }
+  | { type: 'SET_BUDGET_TIER'; category: BudgetCategoryId; tierId: string }
   | { type: 'SUBMIT_BUDGET' }
   | { type: 'NEGOTIATE_SEEK_SUPPORT'; blocId: string }
   | { type: 'NEGOTIATE_OFFER_CONCESSION'; concessionId: ConcessionType }
@@ -151,9 +187,13 @@ export type GameAction =
   | { type: 'WITHDRAW_BILL' }
   | { type: 'PROCEED_TO_REFORM_HUB' }
   | { type: 'PROPOSE_BILL'; billId: string }
-  | { type: 'CONCLUDE_YEAR_ONE' }
-  | { type: 'REPLAY_SAME_SEED' }
+  | { type: 'BEGIN_TURN_LOOP' }
+  | { type: 'ADVANCE_TURN' }
+  | { type: 'CHOOSE_EVENT'; choiceId: string }
+  | { type: 'CONTINUE_AFTER_EVENT' }
+  | { type: 'CONTINUE_FROM_YEAR_REVIEW' }
   | { type: 'NEW_GAME' }
+  | { type: 'RESUME_SAVED_GAME'; savedState: GamePrototypeState }
 
 function findDecisionChoice(decision: DecisionConfig, choiceId: string) {
   const choice = decision.choices.find((c) => c.id === choiceId)
@@ -161,24 +201,39 @@ function findDecisionChoice(decision: DecisionConfig, choiceId: string) {
   return choice
 }
 
-/** Maps each M2 budget category to the promise category its spending counts toward (M3 §24) — defense is the security lever. */
+/** Maps each of the 7 M5 budget categories to the promise category its spending counts toward (M3 §24, extended M5 §30). */
 const BUDGET_CATEGORY_TO_PROMISE_CATEGORY: Record<BudgetCategoryId, PromiseCategory> = {
   health: 'health',
   education: 'education',
-  investment: 'investment',
+  publicInvestment: 'investment',
   defense: 'security',
+  housingTerritories: 'housing',
+  greenTransition: 'environment',
+  administrationEfficiency: 'publicServices',
 }
 
-/** Resolves a bill id to its definition — the Budget Bill is derived live from the current Budget Builder draft; every other id is a static `BILL_CATALOG` entry (M4 §21, §30). Exported so the UI layer can resolve the same definition for display without duplicating this branch. */
+/** Resolves a bill id to its definition — the Budget Bill is derived live from the current Budget Builder draft; every other id is a static `BILL_CATALOG` entry (M4 §21, §30). */
 export function resolveBillDefinition(state: GamePrototypeState, billId: string): PoliticalBillDefinition {
-  return billId === BUDGET_BILL_ID ? deriveBudgetBill(state.choices.budgetSelections) : getBillDefinition(billId)
+  if (billId === BUDGET_BILL_ID) {
+    return deriveBudgetBill(selectionsToLevels(state.draftBudgetSelections), state.budgetLevels, state.currentBudgetLabel ?? 'Budget')
+  }
+  return getBillDefinition(billId)
 }
 
-/** True once the player has brought forward (even if later rejected/withdrawn) their one discretionary Year 1 reform (M4 §31). */
-export function hasUsedDiscretionaryBillSlot(state: Pick<GamePrototypeState, 'billHistory' | 'activeBill'>): boolean {
-  const inHistory = state.billHistory.some((e) => e.billId !== BUDGET_BILL_ID)
-  const inProgress = state.activeBill !== null && state.activeBill.billId !== BUDGET_BILL_ID
-  return inHistory || inProgress
+/** Reforms already ADOPTED once can't be re-adopted (M5 §36) — Reform Hub only offers the remaining catalog. */
+export function availableReformBills(state: Pick<GamePrototypeState, 'billHistory'>): PoliticalBillDefinition[] {
+  const adoptedIds = new Set(state.billHistory.filter((e) => e.billId !== BUDGET_BILL_ID && e.status === 'ADOPTED').map((e) => e.billId))
+  return BILL_CATALOG.filter((b) => !adoptedIds.has(b.id))
+}
+
+/** Scales one policy fragment by a government's execution/reform-effectiveness modifiers (M3 §16 integration points 1-2), field by field — a Partial-safe counterpart to `governmentEffects.ts`'s `applyExecutionScaling`, which requires a FULL `EconomicPolicyInput`. */
+function scalePartialPolicy(partial: Partial<EconomicPolicyInput>, modifiers: GovernmentModifiers): Partial<EconomicPolicyInput> {
+  const scaled: Partial<EconomicPolicyInput> = {}
+  for (const key of Object.keys(partial) as (keyof EconomicPolicyInput)[]) {
+    const isReformField = key === 'laborMarketReform' || key === 'publicSectorReform'
+    scaled[key] = (partial[key] ?? 0) * (isReformField ? modifiers.reformEffectiveness : modifiers.economicExecution)
+  }
+  return scaled
 }
 
 function freshRunState(
@@ -202,8 +257,6 @@ function freshRunState(
       selectedPromiseIds: preservedChoices?.selectedPromiseIds ?? [],
       governmentProfileId: preservedChoices?.governmentProfileId ?? null,
       bercyChoiceId: null,
-      energyChoiceId: null,
-      budgetSelections: { ...NEUTRAL_BUDGET_SELECTIONS },
     },
     electionResult: null,
     parliamentComposition: null,
@@ -215,7 +268,20 @@ function freshRunState(
     billHistory: [],
     politicalDeals: [],
     policyHistory: [],
-    scoreBreakdown: null,
+    bercyPolicyEffect: {},
+    implementedReformPolicies: {},
+    scheduledImplementations: [],
+    lastMergedPolicyInput: { ...NEUTRAL_POLICY_INPUT },
+    budgetLevels: { ...NEUTRAL_BUDGET_LEVELS },
+    draftBudgetSelections: { ...NEUTRAL_BUDGET_SELECTIONS },
+    currentBudgetLabel: null,
+    firedEventIds: [],
+    activeEventId: null,
+    lastEventChoice: null,
+    promiseResolutions: [],
+    economicSnapshots: [],
+    popularityAtYearStart: gameState.political.popularity,
+    finalScoreBreakdown: null,
     endingTitle: null,
   }
 }
@@ -240,27 +306,12 @@ function nudgePoliticalWithGovernment(state: GameState, rawPopularityDelta: numb
   return nudgePolitical(state, popularityDelta, credibilityDelta)
 }
 
-/** The 3 campaign outcomes that are pure functions of (seed, selectedPromiseIds, governmentProfileId) — shared by CHOOSE_GOVERNMENT and REPLAY_SAME_SEED so both compute them identically. */
-function computeCampaignOutcomes(
-  seed: string,
-  selectedPromiseIds: readonly string[],
-  governmentProfileId: string,
-): { electionResult: ElectionResult; parliamentComposition: ParliamentComposition; politicalCapital: number } {
-  const electionResult = computeElectionResult(seed, selectedPromiseIds)
-  const modifiers = getGovernmentProfile(governmentProfileId).modifiers
-  const parliamentComposition = generateParliamentComposition(seed, electionResult.scorePct, selectedPromiseIds, modifiers)
-  const politicalCapital = computeInitialPoliticalCapital(electionResult.scorePct, parliamentComposition.majorityOutcome, coherenceScore(selectedPromiseIds))
-  return { electionResult, parliamentComposition, politicalCapital }
-}
-
 /**
- * The single reducer driving the whole campaign + Year 1 vertical slice.
- * Pure: given the same state and action, always returns the same next
- * state — this is what makes it safe under React's `<StrictMode>`
- * double-invoke (see rng.ts for the full RNG-safety rationale).
- * `CALL_VOTE`/`USE_EXCEPTIONAL_PROCEDURE`/`CONCLUDE_YEAR_ONE` are the only
- * actions that advance the economic simulation or resolve a vote, and each
- * does so exactly once per dispatch.
+ * The single reducer driving the whole campaign + 5-year, 30-turn mandate
+ * (M5 §5: the calendar only ever advances via the explicit `ADVANCE_TURN`
+ * action, never during render). Pure: given the same state and action,
+ * always returns the same next state — this is what makes it safe under
+ * React's `<StrictMode>` double-invoke (see prototype/rng.ts).
  */
 export function gameReducer(state: GamePrototypeState, action: GameAction): GamePrototypeState {
   switch (action.type) {
@@ -332,49 +383,35 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
         label: choice.title,
         amount: choice.policyDelta?.currentSpendingChanges,
       }
-      return {
-        ...state,
-        screen: 'energyShock',
-        gameState: nudgePoliticalWithGovernment(state.gameState, choice.popularityDelta, state.choices.governmentProfileId, choice.credibilityDelta ?? 0),
-        choices: { ...state.choices, bercyChoiceId: choice.id },
-        policyHistory: appendPolicyHistory(state.policyHistory, entry),
-      }
-    }
-
-    case 'CHOOSE_ENERGY': {
-      const choice = findDecisionChoice(ENERGY_SHOCK, action.choiceId)
-      const entry: PolicyHistoryEntry = {
-        turn: state.gameState.meta.turn,
-        sourceId: `energy:${choice.id}`,
-        label: choice.title,
-        category: 'purchasingPower',
-        amount: choice.policyDelta?.transfersChanges,
-      }
+      const gameState = nudgePoliticalWithGovernment(state.gameState, choice.popularityDelta, state.choices.governmentProfileId, choice.credibilityDelta ?? 0)
       return {
         ...state,
         screen: 'budgetBuilder',
-        gameState: nudgePoliticalWithGovernment(state.gameState, choice.popularityDelta, state.choices.governmentProfileId),
-        choices: { ...state.choices, energyChoiceId: choice.id },
+        gameState,
+        choices: { ...state.choices, bercyChoiceId: choice.id },
+        bercyPolicyEffect: choice.policyDelta ?? {},
         policyHistory: appendPolicyHistory(state.policyHistory, entry),
+        currentBudgetLabel: budgetLabelForYearStartTurn(state.gameState.meta.turn + 1),
+        draftBudgetSelections: selectionsFromLevels(state.budgetLevels),
+        popularityAtYearStart: gameState.political.popularity,
       }
     }
 
-    case 'SET_BUDGET_LEVEL':
-      return {
-        ...state,
-        choices: { ...state.choices, budgetSelections: { ...state.choices.budgetSelections, [action.category]: action.level } },
-      }
+    case 'SET_BUDGET_TIER':
+      if (state.screen !== 'budgetBuilder') return state
+      return { ...state, draftBudgetSelections: { ...state.draftBudgetSelections, [action.category]: action.tierId } }
 
     case 'SUBMIT_BUDGET': {
-      const entries = BUDGET_CATEGORY_ORDER.map((categoryId): PolicyHistoryEntry => {
-        const category = BUDGET_CATEGORIES[categoryId]
-        const level = state.choices.budgetSelections[categoryId]
+      if (state.screen !== 'budgetBuilder') return state
+      const newLevels = selectionsToLevels(state.draftBudgetSelections)
+      const entries: PolicyHistoryEntry[] = BUDGET_CATEGORY_ORDER.filter((id) => newLevels[id] !== state.budgetLevels[id]).map((categoryId) => {
+        const tier = getTier(categoryId, state.draftBudgetSelections[categoryId])
         return {
-          turn: state.gameState.meta.turn,
-          sourceId: `budget:${categoryId}`,
-          label: `${category.label} — ${level}`,
+          turn: state.gameState.meta.turn + 1,
+          sourceId: `budget:${categoryId}:${state.currentBudgetLabel ?? ''}`,
+          label: `${state.currentBudgetLabel ?? 'Budget'} — ${BUDGET_CATEGORIES[categoryId].label} — ${tier.label}`,
           category: BUDGET_CATEGORY_TO_PROMISE_CATEGORY[categoryId],
-          amount: category.levels[level],
+          amount: newLevels[categoryId],
         }
       })
       const activeBill: ActiveBillState = {
@@ -472,7 +509,9 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
       return { ...state, screen: 'reformHub' }
 
     case 'PROPOSE_BILL': {
-      if (state.activeBill || hasUsedDiscretionaryBillSlot(state) || action.billId === BUDGET_BILL_ID) return state
+      if (state.activeBill || action.billId === BUDGET_BILL_ID) return state
+      const alreadyAdopted = state.billHistory.some((e) => e.billId === action.billId && e.status === 'ADOPTED')
+      if (alreadyAdopted) return state
       const definition = getBillDefinition(action.billId)
       const capital = state.politicalCapital ?? 0
       if (!canAffordCapital(capital, definition.requiredPoliticalCapital)) return state
@@ -494,29 +533,39 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
       }
     }
 
-    case 'CONCLUDE_YEAR_ONE':
+    case 'BEGIN_TURN_LOOP':
       if (state.activeBill) return state
-      return finalizeYearOne(state)
+      return { ...state, screen: 'mandateTurn' }
 
-    case 'REPLAY_SAME_SEED': {
-      const { selectedPromiseIds, governmentProfileId } = state.choices
-      const next = freshRunState(state.seed, 'bercyAudit', { selectedPromiseIds, governmentProfileId })
-      if (!governmentProfileId) return next
-      const outcomes = computeCampaignOutcomes(state.seed, selectedPromiseIds, governmentProfileId)
-      const profile = getGovernmentProfile(governmentProfileId)
-      const marketNudge = governmentMarketConfidenceNudge(profile.modifiers)
-      const gameState = applyEffect(next.gameState, { type: 'add', path: 'economic.marketConfidence', value: marketNudge, min: 0, max: 100 })
+    case 'ADVANCE_TURN':
+      return advanceTurnAction(state)
+
+    case 'CHOOSE_EVENT':
+      return resolveEventChoice(state, action.choiceId)
+
+    case 'CONTINUE_AFTER_EVENT': {
+      if (state.screen !== 'event' || !state.lastEventChoice) return state
+      return advanceScreenAfterTurn({ ...state, activeEventId: null, lastEventChoice: null })
+    }
+
+    case 'CONTINUE_FROM_YEAR_REVIEW': {
+      if (state.screen !== 'yearReview') return state
+      const nextYearStartTurn = state.gameState.meta.turn + 1
       return {
-        ...next,
-        gameState,
-        electionResult: outcomes.electionResult,
-        parliamentComposition: outcomes.parliamentComposition,
-        politicalCapital: outcomes.politicalCapital,
+        ...state,
+        screen: 'budgetBuilder',
+        currentBudgetLabel: budgetLabelForYearStartTurn(nextYearStartTurn),
+        draftBudgetSelections: selectionsFromLevels(state.budgetLevels),
+        popularityAtYearStart: state.gameState.political.popularity,
       }
     }
 
     case 'NEW_GAME':
       return freshRunState(generateSeed(), 'landing')
+
+    /** M5 §56: the loaded save is validated (`gameVersion`, JSON-parseable) BEFORE this ever dispatches — see save.ts's `loadGame`. Handing it back verbatim is what makes "resume" and "an uninterrupted run" produce identical subsequent RNG draws — nothing here re-derives or resets anything. */
+    case 'RESUME_SAVED_GAME':
+      return action.savedState
   }
 }
 
@@ -592,10 +641,9 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     { courtedBlocIds: state.activeBill.courtedBlocIds, capitalSpent: state.activeBill.capitalSpent },
   )
 
-  const capitalDelta = politicalCapitalDeltaFromBillOutcome(effectiveBill, voteResult.passed)
-  const politicalCapital = applyCapitalDelta(state.politicalCapital ?? 0, capitalDelta)
-  const popularityDelta = voteResult.passed ? 1.5 : -2.5
+  const popularityDelta = popularityDeltaFromBillOutcome(voteResult.passed, effectiveBill.definition.controversy)
   const gameState = nudgePoliticalWithGovernment(state.gameState, popularityDelta, state.choices.governmentProfileId)
+  const tensionFromVote = tensionDeltaFromVoteOutcome(voteResult.passed, effectiveBill.definition.controversy)
 
   const attemptsExhausted = attemptNumber >= MAX_VOTE_ATTEMPTS
   const isTerminal = voteResult.passed || attemptsExhausted
@@ -604,7 +652,7 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     return {
       ...state,
       gameState,
-      politicalCapital,
+      governmentTension: applyTensionDelta(state.governmentTension, tensionFromVote),
       lastVoteResult: voteResult,
       activeBill: { ...state.activeBill, status: 'REJECTED', voteAttempts: attemptNumber },
       screen: 'billVote',
@@ -621,6 +669,30 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     state.blocRelations,
     state.politicalDeals,
   )
+  const dealsForThisBill = politicalDeals.filter((d) => d.billId === effectiveBill.definition.id && d.turn === state.gameState.meta.turn)
+  const tensionDelta =
+    tensionFromVote +
+    tensionDeltaFromBrokenDeals(dealsForThisBill) +
+    tensionDeltaFromCompromise(state.activeBill.appliedConcessionIds.length, voteResult.passed)
+
+  const isBudgetBill = state.activeBill.billId === BUDGET_BILL_ID
+  let budgetLevels = state.budgetLevels
+  let scheduledImplementations = state.scheduledImplementations
+  if (isBudgetBill && status === 'ADOPTED') {
+    budgetLevels = selectionsToLevels(state.draftBudgetSelections)
+  }
+  if (!isBudgetBill && status === 'ADOPTED') {
+    const nextYearStartTurn = state.gameState.meta.turn + 1
+    scheduledImplementations = scheduleImplementation(scheduledImplementations, {
+      sourceId: definition.id,
+      label: definition.title,
+      adoptedTurn: nextYearStartTurn,
+      scheduledTurn: nextYearStartTurn + definition.implementationDelay,
+      policyEffect: scalePartialPolicy(effectiveBill.economicPolicyEffect, modifiers),
+    })
+  }
+
+  const capitalDelta = status === 'ADOPTED' ? Math.round(2 + effectiveBill.definition.reformIntensity * 3) : -Math.round(4 + effectiveBill.definition.controversy * 6)
 
   const historyEntry: BillHistoryEntry = {
     turn: state.gameState.meta.turn,
@@ -639,9 +711,12 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
   return {
     ...state,
     gameState,
-    politicalCapital,
+    politicalCapital: clampPoliticalCapital(applyCapitalDelta(state.politicalCapital ?? 0, capitalDelta)),
+    governmentTension: applyTensionDelta(state.governmentTension, tensionDelta),
     blocRelations,
     politicalDeals,
+    budgetLevels,
+    scheduledImplementations,
     lastVoteResult: voteResult,
     billHistory: [...state.billHistory, historyEntry],
     activeBill: null,
@@ -671,6 +746,22 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
 
   const gameState = nudgePoliticalWithGovernment(state.gameState, procedureResult.popularityDelta, state.choices.governmentProfileId)
 
+  const isBudgetBill = state.activeBill.billId === BUDGET_BILL_ID
+  let budgetLevels = state.budgetLevels
+  let scheduledImplementations = state.scheduledImplementations
+  if (isBudgetBill) {
+    budgetLevels = selectionsToLevels(state.draftBudgetSelections)
+  } else {
+    const nextYearStartTurn = state.gameState.meta.turn + 1
+    scheduledImplementations = scheduleImplementation(scheduledImplementations, {
+      sourceId: definition.id,
+      label: definition.title,
+      adoptedTurn: nextYearStartTurn,
+      scheduledTurn: nextYearStartTurn + definition.implementationDelay,
+      policyEffect: scalePartialPolicy(effectiveBill.economicPolicyEffect, modifiers),
+    })
+  }
+
   const historyEntry: BillHistoryEntry = {
     turn: state.gameState.meta.turn,
     billId: effectiveBill.definition.id,
@@ -689,8 +780,10 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
     ...state,
     gameState,
     politicalCapital: procedureResult.politicalCapitalAfter,
-    governmentTension: clampGovernmentTension(procedureResult.governmentTensionAfter),
+    governmentTension: procedureResult.governmentTensionAfter,
     blocRelations,
+    budgetLevels,
+    scheduledImplementations,
     lastVoteResult: null,
     billHistory: [...state.billHistory, historyEntry],
     activeBill: null,
@@ -699,76 +792,199 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
 }
 
 /**
- * Runs the ONE real economic simulation for Year 1 (M4 §40), after both
- * the mandatory Budget Bill and the optional discretionary reform have
- * been resolved (or the reform slot skipped). Bercy/energy policies are
- * fixed presidential decisions from earlier in the flow; the Budget Bill's
- * effective policy is scaled down (M2's `COMPROMISE_SCALE_ON_REJECTION`)
- * ONLY if it never passed, so a bill that failed still lets the country
- * have SOME budget; a rejected discretionary bill simply contributes
- * nothing (it was optional).
+ * The deterministic part of one mandate turn (M5 §38): economic step, due
+ * implementations, event roll, promise deadline resolution, popularity
+ * drift — everything `mandate/turnController.ts` exposes as pure
+ * functions, wired together with this playthrough's actual government
+ * modifiers and stored state.
  */
-function finalizeYearOne(state: GamePrototypeState): GamePrototypeState {
+function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
+  if (state.screen !== 'mandateTurn') return state
   const governmentProfileId = state.choices.governmentProfileId
-  if (!governmentProfileId) return state
+  if (!governmentProfileId || !state.parliamentComposition) return state
   const modifiers = getGovernmentProfile(governmentProfileId).modifiers
+  const engineConfig = deriveGovernmentEngineConfig(DEFAULT_ECONOMIC_ENGINE_CONFIG, modifiers)
 
-  const bercyChoice = state.choices.bercyChoiceId ? findDecisionChoice(BERCY_AUDIT, state.choices.bercyChoiceId) : null
-  const energyChoice = state.choices.energyChoiceId ? findDecisionChoice(ENERGY_SHOCK, state.choices.energyChoiceId) : null
-
-  const budgetEntry = state.billHistory.find((e) => e.billId === BUDGET_BILL_ID) ?? null
-  const budgetDefinition = deriveBudgetBill(state.choices.budgetSelections)
-  const budgetEffective = applyConcessionsToBill(budgetDefinition, budgetEntry?.appliedConcessionIds ?? [])
-  const budgetPolicyFull = mergePolicyDeltas(budgetEffective.economicPolicyEffect)
-  const budgetPolicy = budgetEntry?.status === 'ADOPTED' ? budgetPolicyFull : scalePolicyInput(budgetPolicyFull, COMPROMISE_SCALE_ON_REJECTION)
-
-  const discretionaryEntry = state.billHistory.find((e) => e.billId !== BUDGET_BILL_ID) ?? null
-  let discretionaryPolicy: Partial<EconomicPolicyInput> = {}
-  if (discretionaryEntry?.status === 'ADOPTED') {
-    const discretionaryDefinition = getBillDefinition(discretionaryEntry.billId)
-    const discretionaryEffective = applyConcessionsToBill(discretionaryDefinition, discretionaryEntry.appliedConcessionIds)
-    discretionaryPolicy = discretionaryEffective.economicPolicyEffect
+  const policyComponents: MandatePolicyComponents = {
+    bercyPolicy: scalePartialPolicy(state.bercyPolicyEffect, modifiers),
+    energyPolicy: {},
+    enactedBudgetPolicy: scalePartialPolicy(budgetLevelsToPolicyInput(state.budgetLevels), modifiers),
+    implementedReformPolicies: state.implementedReformPolicies,
   }
 
-  let policy: EconomicPolicyInput = mergePolicyDeltas(bercyChoice?.policyDelta ?? {}, energyChoice?.policyDelta ?? {}, budgetPolicy, discretionaryPolicy)
-  policy = applyExecutionScaling(policy, modifiers)
+  const result = beginMandateTurn({
+    state: state.gameState,
+    worldState: state.worldState,
+    config: engineConfig,
+    seed: state.seed,
+    policyComponents,
+    previousMergedPolicy: state.lastMergedPolicyInput,
+    scheduledImplementations: state.scheduledImplementations,
+    firedEventIds: state.firedEventIds,
+    selectedPromiseIds: state.choices.selectedPromiseIds,
+    governmentProfileId,
+    policyHistory: state.policyHistory,
+    governmentTension: state.governmentTension,
+    politicalCapital: state.politicalCapital ?? 0,
+    events: EVENT_CATALOG,
+  })
 
-  const shocks: ExternalShock[] = state.choices.energyChoiceId && ENERGY_SHOCK.shock ? [ENERGY_SHOCK.shock] : []
-  const engineConfig = deriveGovernmentEngineConfig(DEFAULT_ECONOMIC_ENGINE_CONFIG, modifiers)
-  const simulatedGameState = simulateYearOne(state.gameState, policy, state.worldState, state.seed, shocks, engineConfig)
+  const promiseCtx: PromiseEvaluationContext = {
+    initialEconomic: state.initialEconomicSnapshot,
+    currentEconomic: result.nextState.economic,
+    currentTurn: result.nextState.meta.turn,
+    policyHistory: state.policyHistory,
+  }
+  const newResolutions = resolveDuePromises(PROMISE_CATALOG, state.choices.selectedPromiseIds, state.promiseResolutions, promiseCtx)
+  const newlyResolvedThisTurn = newResolutions.filter((r) => !state.promiseResolutions.some((old) => old.promiseId === r.promiseId))
+  const promiseResolutionDelta = popularityDeltaFromNewPromiseResolutions(newlyResolvedThisTurn, PROMISE_CATALOG)
 
-  const purchasingPowerDelta = simulatedGameState.economic.purchasingPower - state.initialEconomicSnapshot.purchasingPower
-  const unemploymentDelta = simulatedGameState.economic.unemployment - state.initialEconomicSnapshot.unemployment
-  const growthDelta = simulatedGameState.economic.growth - state.initialEconomicSnapshot.growth
+  const provisionalSnapshot = snapshotFrom(result.nextState.meta.turn, result.nextState.economic, state.gameState.political.popularity)
+  const economicTrendDelta = computeEconomicSentimentDelta([...state.economicSnapshots, provisionalSnapshot])
 
-  const rawPopularityDelta = popularityFromParliamentOutcome(budgetEntry?.status === 'ADOPTED' ? 'adopted' : 'rejected') +
-    popularityFromBudget(state.choices.budgetSelections) +
-    popularityFromYearEndOutcomes(purchasingPowerDelta, unemploymentDelta)
-  const totalPopularityDelta = applyPopularityResilience(rawPopularityDelta, modifiers)
-  const finalGameState = nudgePolitical(simulatedGameState, totalPopularityDelta)
+  const rawTurnDelta = computePopularityTurnDelta({ economicTrendDelta, promiseResolutionDelta })
+  const scaledTurnDelta = applyPopularityResilience(rawTurnDelta, modifiers)
+  const gameStateWithPopularity = nudgePolitical(result.nextState, scaledTurnDelta)
 
-  const yearEndCapitalDelta = politicalCapitalDeltaFromYearEnd(state.initialPopularity, finalGameState.political.popularity, growthDelta)
-  const politicalCapital = clampPoliticalCapital(applyCapitalDelta(state.politicalCapital ?? 0, yearEndCapitalDelta))
+  const finalSnapshot = snapshotFrom(result.nextState.meta.turn, result.nextState.economic, gameStateWithPopularity.political.popularity)
+  const economicSnapshots = recordSnapshot(state.economicSnapshots, finalSnapshot)
 
-  const scoreBreakdown = computeScore(
-    state.initialEconomicSnapshot,
-    finalGameState.economic,
-    finalGameState.political.popularity,
-    state.choices.budgetSelections,
+  const implementationHistory: PolicyHistoryEntry[] = result.appliedImplementations.map((entry) => ({
+    turn: result.nextState.meta.turn,
+    sourceId: `${entry.sourceId}:implemented`,
+    label: `${entry.label} — mise en œuvre`,
+  }))
+
+  const nextStateBase: GamePrototypeState = {
+    ...state,
+    gameState: gameStateWithPopularity,
+    implementedReformPolicies: result.policyComponents.implementedReformPolicies,
+    lastMergedPolicyInput: result.mergedPolicy,
+    scheduledImplementations: [...result.scheduledImplementations],
+    promiseResolutions: newResolutions,
+    economicSnapshots,
+    policyHistory: implementationHistory.reduce(appendPolicyHistory, state.policyHistory),
+    firedEventIds: result.firedEvent ? [...state.firedEventIds, result.firedEvent.id] : state.firedEventIds,
+  }
+
+  if (result.firedEvent) {
+    return { ...nextStateBase, screen: 'event', activeEventId: result.firedEvent.id, lastEventChoice: null }
+  }
+
+  return advanceScreenAfterTurn(nextStateBase)
+}
+
+function resolveEventChoice(state: GamePrototypeState, choiceId: string): GamePrototypeState {
+  if (state.screen !== 'event' || !state.activeEventId) return state
+  const event: EventDefinition = getEventDefinition(state.activeEventId)
+  const choice = event.choices.find((c) => c.id === choiceId)
+  if (!choice) return state
+
+  const governmentProfileId = state.choices.governmentProfileId
+  const modifiers = governmentProfileId ? getGovernmentProfile(governmentProfileId).modifiers : null
+
+  const scaledChoice: EventChoice = modifiers
+    ? {
+        ...choice,
+        economicPolicyEffect: scalePartialPolicy(choice.economicPolicyEffect ?? {}, modifiers),
+        delayedEffects: choice.delayedEffects?.map((d) => ({ ...d, policyEffect: scalePartialPolicy(d.policyEffect, modifiers) })),
+      }
+    : choice
+
+  const turn = state.gameState.meta.turn
+  const { policyComponents, scheduledImplementations } = applyEventChoice(
+    turn,
+    event,
+    scaledChoice,
+    { bercyPolicy: {}, energyPolicy: {}, enactedBudgetPolicy: {}, implementedReformPolicies: state.implementedReformPolicies },
+    state.scheduledImplementations,
   )
-  const endingTitle = computeEndingTitle(
-    state.initialEconomicSnapshot,
-    finalGameState.economic,
-    finalGameState.political.popularity,
-    state.choices.budgetSelections,
-  )
+
+  const worldState = applyEventWorldEffect(state.worldState, choice)
+
+  let gameState = state.gameState
+  if (choice.popularityEffect) {
+    const scaled = modifiers ? applyPopularityResilience(choice.popularityEffect, modifiers) : choice.popularityEffect
+    gameState = nudgePolitical(gameState, scaled)
+  }
+  const politicalCapital = clampPoliticalCapital(applyCapitalDelta(state.politicalCapital ?? 0, choice.politicalCapitalEffect ?? 0))
+  const governmentTension = applyTensionDelta(state.governmentTension, choice.governmentTensionEffect ?? 0)
+
+  let blocRelations = state.blocRelations
+  if (choice.blocRelationshipEffects) {
+    for (const [blocId, delta] of Object.entries(choice.blocRelationshipEffects)) {
+      if (delta) blocRelations = adjustRelation(blocRelations, blocId, delta)
+    }
+  }
+
+  const entry: PolicyHistoryEntry = {
+    turn,
+    sourceId: `event:${event.id}:${choice.id}`,
+    label: `${event.title} — ${choice.title}`,
+    amount: choice.fiscalEffect,
+  }
 
   return {
     ...state,
-    screen: 'yearReport',
-    gameState: finalGameState,
+    gameState,
+    worldState,
     politicalCapital,
-    scoreBreakdown,
-    endingTitle,
+    governmentTension,
+    blocRelations,
+    implementedReformPolicies: policyComponents.implementedReformPolicies,
+    scheduledImplementations: [...scheduledImplementations],
+    policyHistory: appendPolicyHistory(state.policyHistory, entry),
+    lastEventChoice: { eventId: event.id, eventTitle: event.title, choiceId: choice.id, immediateFeedback: choice.immediateFeedback },
   }
+}
+
+/** What screen comes after a turn's economic step (and any event choice) has fully resolved (M5 §5-6, §48-51). */
+function advanceScreenAfterTurn(state: GamePrototypeState): GamePrototypeState {
+  const turn = state.gameState.meta.turn
+  const flags = turnTransitionFlags(turn)
+  if (!flags.isYearEnd) return { ...state, screen: 'mandateTurn' }
+  return finalizeYear(state, flags.isMandateEnd)
+}
+
+/** BILAN ANNÉE X (and, at turn 30, the mandate-ending "5 ANS PLUS TARD") — M5 §51-55. */
+function finalizeYear(state: GamePrototypeState, isMandateEnd: boolean): GamePrototypeState {
+  const drift = applyYearEndDrift({
+    popularityAtYearStart: state.popularityAtYearStart,
+    popularityAtYearEnd: state.gameState.political.popularity,
+    growthDelta: state.gameState.economic.growth - state.initialEconomicSnapshot.growth,
+    governmentTension: state.governmentTension,
+    politicalCapital: state.politicalCapital ?? 0,
+  })
+
+  const finalScoreBreakdown = computeFinalScore({
+    start: state.initialEconomicSnapshot,
+    end: state.gameState.economic,
+    finalPopularity: state.gameState.political.popularity,
+    finalGovernmentTension: drift.governmentTension,
+    finalPoliticalCapital: drift.politicalCapital,
+    promiseResolutions: state.promiseResolutions,
+  })
+
+  const base: GamePrototypeState = {
+    ...state,
+    politicalCapital: drift.politicalCapital,
+    governmentTension: drift.governmentTension,
+    finalScoreBreakdown,
+  }
+
+  if (!isMandateEnd) {
+    return { ...base, screen: 'yearReview' }
+  }
+
+  const reformsEnacted = state.billHistory.filter((e) => e.billId !== BUDGET_BILL_ID && e.status === 'ADOPTED').length
+  const endingTitle = computeEndingTitle({
+    start: state.initialEconomicSnapshot,
+    end: state.gameState.economic,
+    finalPopularity: state.gameState.political.popularity,
+    finalGovernmentTension: drift.governmentTension,
+    promiseResolutions: state.promiseResolutions,
+    reformsEnacted,
+  })
+
+  return { ...base, screen: 'mandateReview', endingTitle }
 }

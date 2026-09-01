@@ -589,6 +589,44 @@
   color: var(--red-bad);
 }
 
+/* ---------- M5: compact persistent navigation (Économie/Promesses/Assemblée/Historique) ---------- */
+
+.cr-navbar {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  overflow-x: auto;
+  background: var(--navy-900);
+  border-bottom: 1px solid var(--navy-700);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.cr-navbar__item {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--navy-700);
+  background: var(--navy-800);
+  color: var(--off-white-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.cr-navbar__item:hover {
+  color: var(--off-white);
+}
+
+.cr-navbar__item--active {
+  background: var(--blue-accent);
+  border-color: var(--blue-accent);
+  color: var(--off-white);
+}
+
 /* ---------- Campaign: promise cards ---------- */
 
 .cr-promise-card {

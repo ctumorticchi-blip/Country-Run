@@ -1,26 +1,28 @@
 import { BUDGET_CATEGORIES, BUDGET_CATEGORY_ORDER } from '../../game/country-run/budget/budgetCategories.ts'
-import { estimateBudgetImpact } from '../../game/country-run/budget/budgetEffects.ts'
-import type { BudgetCategoryId, BudgetLevel, BudgetSelections } from '../../game/country-run/budget/budgetTypes.ts'
+import { estimateBudgetImpact, selectionsToLevels } from '../../game/country-run/budget/budgetEffects.ts'
+import type { BudgetCategoryId, BudgetLevels, BudgetSelections } from '../../game/country-run/budget/budgetTypes.ts'
 import type { EconomicState } from '../../engine/state/gameState.ts'
 import { BudgetCategoryCard } from '../components/BudgetCategoryCard.tsx'
 import { BudgetSummary } from '../components/BudgetSummary.tsx'
 
 interface BudgetBuilderScreenProps {
   economic: EconomicState
+  budgetLabel: string
   selections: BudgetSelections
-  onChangeLevel: (category: BudgetCategoryId, level: BudgetLevel) => void
+  previousLevels: BudgetLevels
+  onChangeTier: (category: BudgetCategoryId, tierId: string) => void
   onSubmit: () => void
 }
 
-export function BudgetBuilderScreen({ economic, selections, onChangeLevel, onSubmit }: BudgetBuilderScreenProps) {
-  const estimate = estimateBudgetImpact(selections, economic.gdp)
+export function BudgetBuilderScreen({ economic, budgetLabel, selections, previousLevels, onChangeTier, onSubmit }: BudgetBuilderScreenProps) {
+  const estimate = estimateBudgetImpact(selectionsToLevels(selections), previousLevels, economic.gdp)
 
   return (
     <div className="cr-screen">
       <div className="cr-page">
         <div>
           <p className="cr-eyebrow">Budget</p>
-          <h1 className="cr-title">BUDGET 2028</h1>
+          <h1 className="cr-title">{budgetLabel.toUpperCase()}</h1>
           <p className="cr-body-text">Chaque milliard dépensé doit être financé. Chaque économie a des conséquences.</p>
         </div>
 
@@ -43,8 +45,8 @@ export function BudgetBuilderScreen({ economic, selections, onChangeLevel, onSub
           <BudgetCategoryCard
             key={categoryId}
             category={BUDGET_CATEGORIES[categoryId]}
-            level={selections[categoryId]}
-            onChange={(level) => { onChangeLevel(categoryId, level) }}
+            tierId={selections[categoryId]}
+            onChange={(tierId) => { onChangeTier(categoryId, tierId) }}
           />
         ))}
 

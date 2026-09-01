@@ -24,7 +24,7 @@ export type PromiseDifficulty = 'LOW' | 'MEDIUM' | 'HIGH'
  * `PromiseStatus` (`engine/state/promise.ts`, 4 states), so this is its own
  * Country Run-specific type rather than a change to that generic one.
  */
-export type PromiseStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'ON_TRACK' | 'AT_RISK' | 'KEPT' | 'BROKEN'
+export type PromiseStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'ON_TRACK' | 'AT_RISK' | 'KEPT' | 'PARTIAL' | 'BROKEN'
 
 /**
  * Loose political affinity tags used only for Parliament bloc compatibility
@@ -52,6 +52,15 @@ export interface PromiseEvaluation {
   status: PromiseStatus
   /** Human-readable progress, e.g. "5.0% → objectif 4.0%" — never raw engine coefficients. */
   progressLabel: string
+  /**
+   * 0-1, how far toward the target the promise got — used only by
+   * `mandate/promiseResolution.ts` to tell a near-miss (PARTIAL) apart from
+   * a clear miss (BROKEN) once a deadline is frozen. Omitted by evaluators
+   * that have no meaningful notion of partial progress
+   * (`evaluateUnavailableLever`) — resolution treats a missing fraction as
+   * inconclusive and always classifies those as PARTIAL, never BROKEN.
+   */
+  progressFraction?: number
 }
 
 /**

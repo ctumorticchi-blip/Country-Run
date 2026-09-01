@@ -36,6 +36,7 @@ export function evaluateThreshold(params: {
   return {
     status: progressStatus(currentTurn, deadlineTurn, achieved, progressFraction),
     progressLabel: `${formatValue(current)} → objectif ${formatValue(target)}`,
+    progressFraction: achieved ? 1 : progressFraction,
   }
 }
 
@@ -50,15 +51,21 @@ export function evaluatePolicyCommitment(params: {
   const { currentTurn, deadlineTurn, policyHistory, category, minAnnualAmount } = params
   const delivered = policyHistory.some((entry) => entry.category === category && (entry.amount ?? 0) >= minAnnualAmount)
 
-  if (currentTurn === 0) return { status: 'NOT_STARTED', progressLabel: `Objectif : ${String(minAnnualAmount)} Md€/an` }
+  if (currentTurn === 0)
+    return { status: 'NOT_STARTED', progressLabel: `Objectif : ${String(minAnnualAmount)} Md€/an`, progressFraction: 0 }
   if (delivered) {
     return {
       status: currentTurn >= deadlineTurn ? 'KEPT' : 'ON_TRACK',
       progressLabel: `Engagement tenu (${String(minAnnualAmount)} Md€/an)`,
+      progressFraction: 1,
     }
   }
-  if (currentTurn >= deadlineTurn) return { status: 'BROKEN', progressLabel: 'Non tenu à l’échéance' }
-  return { status: 'AT_RISK', progressLabel: `Pas encore engagé — ${String(minAnnualAmount)} Md€/an attendus` }
+  if (currentTurn >= deadlineTurn) return { status: 'BROKEN', progressLabel: 'Non tenu à l’échéance', progressFraction: 0 }
+  return {
+    status: 'AT_RISK',
+    progressLabel: `Pas encore engagé — ${String(minAnnualAmount)} Md€/an attendus`,
+    progressFraction: 0,
+  }
 }
 
 /**
