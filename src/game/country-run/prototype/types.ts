@@ -1,14 +1,28 @@
 import type { EconomicPolicyInput, ExternalShock } from '../../../engine/economy/types.ts'
 import type { BudgetSelections } from '../budget/budgetTypes.ts'
 
-/** The Year 1 vertical slice's screen sequence (Product Bible §13, scoped to M2). */
+/**
+ * The full pre-presidency + Year 1 screen sequence (M3 §1-9, extending the
+ * M2 vertical slice). `'parliament'` was renamed `'parliamentVote'` to
+ * disambiguate it from the new `'parliamentComposition'` screen (the
+ * legislative election's seat results) — same Year 1 budget-vote screen as
+ * M2, just a clearer name now that Parliament has two distinct screens.
+ */
 export type ScreenId =
   | 'landing'
+  | 'campaignIntro'
+  | 'promiseSelection'
+  | 'promiseConfirmation'
   | 'election'
+  | 'franceBriefing'
+  | 'governmentSelection'
+  | 'legislativeElection'
+  | 'parliamentComposition'
+  | 'mandateStart'
   | 'bercyAudit'
   | 'energyShock'
   | 'budgetBuilder'
-  | 'parliament'
+  | 'parliamentVote'
   | 'yearReport'
 
 export interface DecisionChoicePreview {
@@ -50,8 +64,15 @@ export interface ParliamentChoiceConfig {
 
 export type ParliamentOutcome = 'adopted' | 'rejected'
 
-/** Accumulated player choices for the run — enough to replay deterministically from the same seed. */
+/**
+ * Accumulated player choices for the run — enough to replay deterministically
+ * from the same seed. `selectedPromiseIds` and `governmentProfileId` are the
+ * campaign-phase choices (M3 §3, §15); everything else is the Year 1
+ * gameplay choices carried over unchanged from M2.
+ */
 export interface PlayerChoices {
+  selectedPromiseIds: string[]
+  governmentProfileId: string | null
   bercyChoiceId: string | null
   energyChoiceId: string | null
   budgetSelections: BudgetSelections

@@ -6,10 +6,25 @@ import type { DecisionConfig } from './types.ts'
  * fields feed the real M1.5 engine via policyDelta; popularity/credibility
  * fields are prototype-only (popularity.ts).
  */
+/**
+ * Bercy's audit text is a function of the player's ACTUAL 5 selected
+ * promises (M3 §11), not a fixed figure — replacing M2's hardcoded
+ * "35 Md€". `BERCY_AUDIT.text` below is only a generic fallback for
+ * contexts with no promise selection (e.g. a decision-card preview); the
+ * real Year 1 screen always calls this with the campaign's actual cost.
+ */
+export function bercyAuditText(totalAnnualCostBn: number, isDifficult: boolean): string {
+  const costLabel = totalAnnualCostBn > 0 ? `environ ${String(totalAnnualCostBn)} Md€` : 'peu de dépenses nouvelles'
+  const warning = isDifficult
+    ? ' ⚠️ Ce programme est difficile à financer sans arbitrages significatifs.'
+    : ''
+  return `Vos 5 engagements de campagne représenteraient ${costLabel} de dépenses supplémentaires par an. Le ministère des Finances vous demande de définir une ligne avant la préparation du budget.${warning}`
+}
+
 export const BERCY_AUDIT: DecisionConfig = {
   id: 'bercy-audit',
   title: 'BERCY VOUS PRÉSENTE L’ADDITION',
-  text: 'Vos premières promesses représenteraient environ 35 Md€ de dépenses supplémentaires par an. Le ministère des Finances vous demande de définir une ligne avant la préparation du budget.',
+  text: bercyAuditText(0, false),
   choices: [
     {
       id: 'assume-deficit',

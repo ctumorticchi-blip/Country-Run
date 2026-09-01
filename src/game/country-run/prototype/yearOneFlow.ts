@@ -1,5 +1,6 @@
 import { advanceEconomicTurn } from '../../../engine/economy/advanceEconomy.ts'
 import { DEFAULT_ECONOMIC_ENGINE_CONFIG } from '../../../engine/economy/config/defaultConfig.ts'
+import type { EconomicEngineConfig } from '../../../engine/economy/config/types.ts'
 import { NEUTRAL_POLICY_INPUT, type EconomicPolicyInput, type ExternalShock, type WorldState } from '../../../engine/economy/types.ts'
 import { TURNS_PER_YEAR } from '../../../engine/state/calendar.ts'
 import type { GameState } from '../../../engine/state/gameState.ts'
@@ -52,6 +53,8 @@ export function simulateYearOne(
   worldState: WorldState,
   seed: string,
   shocks: readonly ExternalShock[],
+  /** Defaults to the shared default config — pass a per-playthrough clone (e.g. `deriveGovernmentEngineConfig`) to reflect a government profile's `implementationSpeed` (M3 §16). Never mutates the config passed in. */
+  config: EconomicEngineConfig = DEFAULT_ECONOMIC_ENGINE_CONFIG,
 ): GameState {
   let state = initialState
 
@@ -65,7 +68,7 @@ export function simulateYearOne(
       policy,
       worldState,
       rng,
-      DEFAULT_ECONOMIC_ENGINE_CONFIG,
+      config,
       turnShocks,
       previousPolicy,
     ).nextState
