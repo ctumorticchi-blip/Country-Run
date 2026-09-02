@@ -62,6 +62,8 @@ export function YearReviewScreen({
           <p className="cr-eyebrow">Bilan</p>
           <h1 className="cr-title">BILAN — ANNÉE {year}</h1>
           {isMidterm ? <span className="cr-badge">MI-MANDAT</span> : null}
+          {/* M6.1 §11: never blur a real, played-out outcome with the pre-adoption "PRÉVISION DE BERCY". */}
+          <span className="cr-badge cr-badge--adopted">RÉSULTAT SIMULÉ</span>
         </div>
 
         <div className="cr-card cr-score">

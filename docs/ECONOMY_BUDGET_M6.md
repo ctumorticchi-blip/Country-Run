@@ -27,19 +27,22 @@ Worked examples, all covered by regression tests
 - Pensions cut then reverted to "Protéger" → the reversal applies exactly
   once, as a negative delta.
 
-## 2. Public finance baseline (unchanged — never silently replaced)
+## 2. Public finance baseline
 
-The calibrated France 2027 starting state remains
-`data/initialState.ts`'s `PLACEHOLDER_ECONOMIC_STATE`:
+**Updated in M6.1** — the starting state is no longer a placeholder. It is
+now the documented **France 2027 baseline**, derived from the 2025
+observed Insee anchor bridged forward via Banque de France's June 2026
+projection — full derivation in `docs/FRANCE_BASELINE_2027.md`,
+implemented in `data/initialState.ts`:
 
 | Field | Value |
 |---|---|
-| Nominal GDP | 2 800 Md€ |
-| Public revenue | 1 372 Md€ (≈49.0% GDP) |
-| Public spending | 1 512 Md€ (≈54.0% GDP, includes interest) |
-| Interest cost | 100.8 Md€ |
-| Deficit | 140 Md€ (5.0% GDP) |
-| Debt | 3 360 Md€ (120.0% GDP) |
+| Nominal GDP | 3 150 Md€ |
+| Public revenue | 1 638 Md€ (52.0% GDP) |
+| Public spending | 1 796 Md€ (57.0% GDP, includes interest) |
+| Interest cost | 76 Md€ |
+| Deficit | 158 Md€ (5.0% GDP) |
+| Debt | 3 780 Md€ (120.0% GDP) |
 
 M6's 9 spending blocks + locked interest, and 4 controllable + 1 residual
 revenue block, are a **gameplay decomposition** of these same totals —
@@ -67,23 +70,27 @@ No 2027 invented figure is ever labeled OBSERVED.
 
 | Block | Baseline (Md€/yr) | Engine field(s) |
 |---|---:|---|
-| Pensions | 335 | `transfersChanges` (exclusively — see §8) |
-| Health | 220 | `currentSpendingChanges` |
-| Solidarity | 225 | `currentSpendingChanges` |
-| Education | 125 | `educationInvestment` |
-| Économie & investissement | 140 | `currentSpendingChanges` / `infrastructureInvestment` / `researchInvestment` / `publicInvestmentChanges`, by tier |
-| Défense | 45 | `currentSpendingChanges` |
-| Sécurité | 43 | `currentSpendingChanges` |
-| Territoires/logement/environnement/culture | 95 | `publicInvestmentChanges` / `infrastructureInvestment` / `currentSpendingChanges`, by tier |
-| Administration | 183 | `currentSpendingChanges` + `publicSectorReform` |
-| **Charge de la dette** (locked) | ≈101 (reference only) | never a tier — `economic.interestCost`, computed fresh every turn |
+| Pensions | 390 | `transfersChanges` (exclusively — see §8) |
+| Health | 270 | `currentSpendingChanges` |
+| Solidarity | 280 | `currentSpendingChanges` |
+| Education | 170 | `educationInvestment` |
+| Économie & investissement | 165 | `currentSpendingChanges` / `infrastructureInvestment` / `researchInvestment` / `publicInvestmentChanges`, by tier |
+| Défense | 50 | `currentSpendingChanges` |
+| Sécurité | 42 | `currentSpendingChanges` |
+| Territoires/logement/environnement/culture | 120 | `publicInvestmentChanges` / `infrastructureInvestment` / `currentSpendingChanges`, by tier |
+| Administration | 233 | `currentSpendingChanges` + `publicSectorReform` |
+| **Charge de la dette** (locked) | ≈76 (reference only) | never a tier — `economic.interestCost`, computed fresh every turn |
 
-Sum of the 9 controllable baselines: **1 411 Md€**. Plus the interest
-reference (**101 Md€**) = **1 512 Md€ = the calibrated `publicSpending`
-exactly**. Administration's baseline is the one figure picked to close the
-sum exactly (the brief's own allowance for "a documented small
-reconciliation residual") — every other baseline is a proportional scale
-of the brief's own reference magnitudes.
+Sum of the 9 controllable baselines: **1 720 Md€**. Plus the interest
+reference (**76 Md€**) = **1 796 Md€ = the France 2027 baseline
+`publicSpending` exactly**. **M6.1 §5's instruction against blindly
+proportional-scaling expenditure**: Pensions/Health/Défense are anchored
+to commonly-cited real French functional-spending orders of magnitude
+(COR-reported total pension expenditure ≈14% GDP; ONDAM-scale health
+spending; the 2027 LPM 2024-2030 defense trajectory) rather than a
+mechanical rescale of the earlier placeholder figures. Administration's
+baseline is still the one block picked to close the sum exactly (the M6
+brief's own allowance for "a documented small reconciliation residual").
 
 **No double counting**: pensions and solidarity are separate blocks
 (`transfersChanges` reserved for pensions alone; solidarity uses
@@ -95,24 +102,28 @@ Territoires; debt interest is never one of the 9 blocks.
 
 | Block | Baseline (Md€/yr) | Share |
 |---|---:|---:|
-| Cotisations sociales | 615 | ≈44.8% |
-| Fiscalité de la consommation (TVA, indirects) | 275 | ≈20.0% |
-| Fiscalité des ménages | 245 | ≈17.9% |
-| Fiscalité des entreprises | 135 | ≈9.8% |
-| Autres recettes publiques (non pilotable) | 102 | ≈7.4% |
+| Cotisations sociales | 734 | ≈44.8% |
+| Fiscalité de la consommation (TVA, indirects) | 328 | ≈20.0% |
+| Fiscalité des ménages | 293 | ≈17.9% |
+| Fiscalité des entreprises | 161 | ≈9.8% |
+| Autres recettes publiques (non pilotable) | 122 | ≈7.4% |
 
-Sum: **1 372 Md€ = the calibrated `publicRevenue` EXACTLY**. "Other public
-revenue" is never a tier — it is displayed as the residual
+Sum: **1 638 Md€ = the France 2027 baseline `publicRevenue` EXACTLY**.
+"Other public revenue" is never a tier — it is displayed as the residual
 `publicRevenue - Σ(4 controllable blocks' projected amount)`
 (`finance/financeEffects.ts`'s `otherRevenueEstimate`), so the 5 blocks
-always sum to the real simulated total, whatever policy has changed.
+always sum to the real simulated total, whatever policy has changed. The
+4 controllable shares are the SAME relative composition as before M6.1 —
+a proportional carry-forward is appropriate here (unlike expenditure)
+since France's revenue mix by source is comparatively stable year to
+year.
 
 ## 6. Reconciliation test result
 
 `finance/financeEffects.test.ts`'s reconciliation suite confirms:
-- `SPENDING_BASELINE_TOTAL` (1 512) matches `publicSpending` (1 512)
+- `SPENDING_BASELINE_TOTAL` (1 796) matches `publicSpending` (1 796)
   exactly, residual **0 Md€**.
-- `REVENUE_BASELINE_TOTAL` (1 372) matches `publicRevenue` (1 372)
+- `REVENUE_BASELINE_TOTAL` (1 638) matches `publicRevenue` (1 638)
   exactly, residual **0 Md€**.
 - No spending block's id or config references `interestCost`/
   `effectiveDebtRate` — interest is never represented twice.
@@ -173,7 +184,21 @@ cut.
 
 ## 17-18. Debt interest
 
-**Audited, unchanged, no engine work required.** `computeEffectiveDebtRate`
+**M6.1 §6 addendum**: the STARTING `effectiveDebtRate`/`interestCost`
+values were audited separately from the mechanism (which is unchanged —
+see below). The old placeholder started `effectiveDebtRate` at 3.0%
+applied to a placeholder debt stock, giving `interestCost` ≈101 Md€. The
+France 2027 baseline instead derives the starting effective rate from the
+OBSERVED 2025 ratio (interest expenditure / Maastricht debt stock ≈1.87%,
+a like-for-like ratio since both use the same Maastricht/ESA2010 debt
+concept this game already tracks — never "interest / a mismatched
+accounting-debt figure"), with a modest documented uptick to 2.0% for
+2027 (continued gradual refinancing at higher rates) — giving a starting
+`interestCost` of 76 Md€ on a 3,780 Md€ debt stock. Full derivation:
+`docs/FRANCE_BASELINE_2027.md` §2.5. This is a STARTING-VALUE correction
+only — the mechanism below (gradual refinancing) is untouched.
+
+**Audited, unchanged, no engine work required for the mechanism itself.** `computeEffectiveDebtRate`
 (`engine/economy/debt.ts`) already reprices GRADUALLY through a
 `refinancingShare` of the debt stock toward a new borrowing rate
 (ECB rate + baseline spread + a risk premium that widens as
@@ -248,24 +273,44 @@ vs. its tier button deltas.
 real, calibrated M1.5 engine forward exactly one gameplay year (6 turns)
 under 3 isolated forecast-only seeds, never touching real game state
 (`advanceEconomicTurn` already returns fresh objects). The 3-run spread
-becomes the displayed low/central/high range; a `widthMultiplier`
-(intended to be driven by `governmentEffects.ts`'s
-`fiscalEstimateRangeWidth`) further widens/narrows the range and derives
-a HIGH/MEDIUM/LOW confidence label. **Known limitation**: this module is
-fully implemented and tested (`finance/budgetForecast.test.ts`: purity,
-determinism, ranges, confidence labeling, policy sensitivity) but is
-**not wired into a live UI screen** in this milestone — see "Known
-limitations" below.
+becomes the displayed low/central/high range; a `widthMultiplier` driven
+by `governmentEffects.ts`'s `fiscalEstimateRangeWidth` further
+widens/narrows the range and derives a HIGH/MEDIUM/LOW confidence label.
+
+**M6.1 §8-10**: now WIRED LIVE into `BudgetBuilderScreen.tsx` — every
+render recomputes `finance/financeEffects.ts`'s
+`prospectivePolicyForDraft` (the draft's proposed changes treated as
+already in effect, merged onto `lastMergedPolicyInput`) and feeds it to
+`forecastNextYear`, via `useMemo` keyed on the draft selections. This is
+still a pure READ: it never dispatches, schedules, appends to the fiscal
+ledger, or draws from the real gameplay RNG stream (isolated
+`${seed}:forecast-a/b/c` sub-seeds, proven disjoint from real
+`mandate-turn-N` labels) — see `app/gameReducer.m6.test.ts`'s "M6.1 §10
+forecast purity" suite for the mechanical proof (toggling tiers back and
+forth, reverting a tier, and computing forecasts before a real turn all
+leave `gameState`/`fiscalLedger`/`scheduledImplementations`/
+`policyHistory`/`promiseResolutions` byte-for-byte unchanged).
 
 ## 34. Note de Bercy
 
 `app/components/BudgetSummary.tsx` is the sticky Budget Builder summary,
-rebuilt as a neutral "NOTE DE BERCY": recettes/dépenses/solde (Md€ and
-%GDP), solde primaire, charge de la dette, effort de stabilisation de la
-dette, changement structurel net, principaux risques (from changed
-tiers' `riskDescription`), impact sur les engagements (from changed
-tiers' `promiseLinks` matched against selected promises). Never
-"bon"/"mauvais budget" — only factual, comparative statements.
+now genuinely a "NOTE DE BERCY" with 2 clearly separated sections:
+
+- **"VOTRE BUDGET"** — recettes/dépenses/solde (Md€ and %GDP), solde
+  primaire, charge de la dette, effort de stabilisation de la dette,
+  changement structurel net, "politique actuelle vs budget proposé —
+  principales causes" (M6.1 §9: the top 4 changed blocks by fiscal
+  magnitude, e.g. "Retraites : -12 Md€/an (après montée en charge)"),
+  principaux risques, impact sur les engagements.
+- **"PRÉVISION DE BERCY"** (M6.1 §8, §11-12) — the LIVE forecast, always
+  shown as a range (never a single number), with an explicit
+  ÉLEVÉE/MOYENNE/FAIBLE confidence label and a one-line caveat
+  ("une estimation, pas un résultat garanti"). Explicitly and visually
+  distinct from the "RÉSULTAT SIMULÉ" badge M6.1 adds to Year Review and
+  Mandate Review (§11: never blur a pre-adoption forecast with a real,
+  played-out outcome).
+
+Never "bon"/"mauvais budget" — only factual, comparative statements.
 
 ## 35-37. Debt trajectory, primary balance, debt stabilization
 
@@ -389,26 +434,36 @@ alongside the per-block changes — proven end to end in
 
 ## 54-59. Magnitude audit
 
-6 five-year scenarios were run (see the final report's comparison
-table). Results diverge meaningfully: debt ratio spans ~124% (A Strong
-Consolidation) to ~154% (B Expansionary), a ~30-point spread; deficit
-spans 4.7%–12.7%. A Strong Consolidation nearly stabilizes the debt ratio
-(123.7% vs. a 120.0% starting point) — a disciplined strategy CAN
-materially improve the trajectory, at a real popularity/service-index
-cost, without ever guaranteeing debt reduction (all 6 scenarios still end
-above the 120% starting ratio — 5 years is not long enough to fully repay
-M1.5's calibrated primary deficit even under consolidation, which is the
-expected, honest outcome). B Expansionary and D Tax Cutter both worsen
-the deficit materially relative to F Balanced — "no free lunch" holds for
-both spending-driven and tax-cut-driven expansion. All 6 stay within the
-M6 §76 plausibility gates (deficit < 15%, debt < 180%, positive
-unemployment, no service-index blow-up, revenue/spending well under the
-70%/80% GDP ceilings). The debt-interest gradual-repricing stress test is
-already covered by the existing, unmodified `engine/economy/debt.test.ts`
-suite (confirmed during the M6 audit — no engine change was needed) and
-is additionally visible in the B Expansionary scenario's interest cost
-nearly doubling (100.8 → ~193 Md€) as debt and confidence deteriorate
-over the 5 years, gradually, turn by turn.
+**Updated in M6.1** — 6 five-year scenarios were re-run against the
+France 2027 baseline (see the M6.1 final report's comparison table).
+Results diverge meaningfully: debt ratio spans ~127.3% (A Strong
+Consolidation) to ~153.5% (B Expansionary), a ~26-point spread; deficit
+spans 5.8%–12.8%. A Strong Consolidation stays CLOSEST to the 120.0%
+starting ratio of all 6 — a disciplined strategy CAN materially improve
+the trajectory relative to expansionary alternatives, at a real
+popularity/service-index cost, without ever guaranteeing debt reduction
+(all 6 scenarios still end above the 120% starting ratio — 5 years is not
+long enough to fully repay M1.5's calibrated primary deficit even under
+consolidation, which is the expected, honest outcome). B Expansionary and
+D Tax Cutter both worsen the deficit materially relative to F Balanced —
+"no free lunch" holds for both spending-driven and tax-cut-driven
+expansion. All 6 stay within the M6 §76 plausibility gates (deficit <
+15%, debt < 180%, positive unemployment, no service-index blow-up,
+revenue/spending well under the 70%/80% GDP ceilings). The debt-interest
+gradual-repricing stress test is already covered by the existing,
+unmodified `engine/economy/debt.test.ts` suite (confirmed during the M6
+audit — no engine change was needed) and is additionally visible in the
+B Expansionary scenario's interest cost nearly tripling (76 → ~212 Md€)
+as debt and confidence deteriorate over the 5 years, gradually, turn by
+turn. A pure NEUTRAL (no-policy-change) sanity check after one gameplay
+year lands at growth 1.06%, inflation 1.72%, unemployment 7.90%, debt
+122.18% — all closely tracking the Banque de France-consistent
+calibration checkpoint (§14 of the M6.1 brief); the one-year deficit
+(6.59%) drifts somewhat above the flat ~5% reference figure, an emergent
+result of the unmodified M1.5 engine's own organic spending/revenue
+dynamics rather than anything M6.1 introduced — reported honestly as a
+calibration observation, not silently corrected (M6.1 explicitly scopes
+out further engine recalibration).
 
 ## 60. Structural vs cyclical revenue — see §27.
 
@@ -458,14 +513,9 @@ SIMULATED figures the rest of the UI shows.
 
 ## Known limitations (honest, documented)
 
-1. **Forecast UI not wired into a live screen.** `finance/budgetForecast.ts`
-   is complete, pure, and tested, but the Budget Builder's live summary
-   uses only current-state-derived figures (no simulated forward range) —
-   running a 3-seed, 6-turn forward simulation on every keystroke was
-   judged not worth the added complexity/latency for this milestone,
-   especially given M6 §78's explicit instruction to prioritize clarity
-   over added screens. A future milestone can surface it on the
-   post-adoption "budget result" moment.
+1. **RESOLVED in M6.1**: the live "PRÉVISION DE BERCY" forecast is now
+   wired into the Budget Builder — see `docs/ECONOMY_BUDGET_M6.md`'s
+   updated §32-34 note and the M6.1 final report's §8.
 2. **French locale formatting is not retrofitted across every pre-existing
    M0-M5 screen** — only the new M6 finance UI uses `formatMdFr`/
    `formatPercentFr`; older screens keep their existing `.toFixed()`-based

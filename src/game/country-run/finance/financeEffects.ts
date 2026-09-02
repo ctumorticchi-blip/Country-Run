@@ -2,6 +2,7 @@ import type { EconomicPolicyInput } from '../../../engine/economy/types.ts'
 import type { EconomicState, Turn } from '../../../engine/state/gameState.ts'
 import type { ScheduledImplementation } from '../parliament/implementationSchedule.ts'
 import type { PolicyHistoryEntry } from '../prototype/policyHistory.ts'
+import { mergePolicyDeltas } from '../prototype/yearOneFlow.ts'
 import type { PromiseCategory } from '../promises/promiseTypes.ts'
 import type { FinanceLevels, RevenueBlockId, SpendingBlockId } from './financeTypes.ts'
 import { getRevenueTier, NEUTRAL_REVENUE_LEVELS, OTHER_REVENUE_BASELINE, REVENUE_BLOCK_ORDER, REVENUE_BLOCKS } from './revenueBlocks.ts'
@@ -25,8 +26,8 @@ import { getSpendingTier, NEUTRAL_SPENDING_LEVELS, SPENDING_BLOCK_ORDER, SPENDIN
  */
 
 const PRIMARY_SPENDING_BASELINE = SPENDING_BLOCK_ORDER.reduce((sum, id) => sum + SPENDING_BLOCKS[id].baseline, 0)
-/** Documented calibration placeholder — the France-2027 starting `interestCost` (see `data/initialState.ts`), used only as a DISPLAY reference for the M6 §6 reconciliation baseline, never fed to the engine (the real interest cost is always `economic.interestCost`, computed fresh every turn). */
-export const DEBT_INTEREST_BASELINE = 101
+/** Documented reference figure — the France-2027 starting `interestCost` (see `data/initialState.ts` / `docs/FRANCE_BASELINE_2027.md`), used only as a DISPLAY reference for the M6 §6 reconciliation baseline, never fed to the engine (the real interest cost is always `economic.interestCost`, computed fresh every turn). */
+export const DEBT_INTEREST_BASELINE = 76
 export const SPENDING_BASELINE_TOTAL = PRIMARY_SPENDING_BASELINE + DEBT_INTEREST_BASELINE
 
 export const REVENUE_BASELINE_TOTAL = REVENUE_BLOCK_ORDER.reduce((sum, id) => sum + REVENUE_BLOCKS[id].baseline, 0) + OTHER_REVENUE_BASELINE
@@ -169,6 +170,22 @@ export function sumFinanceChangeEffects(changes: readonly FinanceBlockChange[]):
     }
   }
   return merged
+}
+
+/**
+ * M6.1 §8-10: the "as if this draft budget were already fully adopted"
+ * merged policy the LIVE Note de Bercy forecasts from — every changed
+ * block's `effectDelta` treated as immediately in effect, regardless of
+ * its real `implementationTiming` (a documented forecast simplification,
+ * same as M6's original design intent: showing "if this budget's changes
+ * fully phase in", not replicating exact per-block phase-in timing).
+ * PURE — never mutates `lastMergedPolicyInput`, never touches real game
+ * state, scheduling, the fiscal ledger, or promise history; the caller
+ * (a UI component) only ever READS the result to feed
+ * `budgetForecast.ts`'s `forecastNextYear`.
+ */
+export function prospectivePolicyForDraft(lastMergedPolicyInput: EconomicPolicyInput, changes: readonly FinanceBlockChange[]): EconomicPolicyInput {
+  return mergePolicyDeltas(lastMergedPolicyInput, sumFinanceChangeEffects(changes))
 }
 
 export interface BudgetEquation {

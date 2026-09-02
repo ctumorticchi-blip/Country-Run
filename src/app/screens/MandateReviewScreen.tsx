@@ -91,6 +91,7 @@ export function MandateReviewScreen({
         <div>
           <p className="cr-eyebrow">Mai 2032</p>
           <h1 className="cr-title">5 ANS PLUS TARD</h1>
+          <span className="cr-badge cr-badge--adopted">RÉSULTAT SIMULÉ</span>
         </div>
 
         <div className="cr-card cr-score">

@@ -1,19 +1,25 @@
 import type { FinanceBlockConfig, RevenueBlockId } from './financeTypes.ts'
 
 /**
- * ⚠️ PROTOTYPE CONTENT (M6 §19-27). 4 controllable revenue blocks — the
- * MAIN strategic levers, not every line of French taxation (M6 §19: "the
- * player controls the main strategic levers, not every block"). A 5th
- * bucket, "other public revenue" (~102 Md€, non-controllable, evolves only
- * via the engine's own growth elasticity), is NOT a `RevenueBlockId` — it
- * has no tiers and is computed as a residual for display, see
- * `financeEffects.ts`'s `otherRevenueEstimate`.
+ * ⚠️ CONTENT, GAME_ESTIMATE (M6 §19-27, rebaselined M6.1 §5-7). 4
+ * controllable revenue blocks — the MAIN strategic levers, not every line
+ * of French taxation (M6 §19: "the player controls the main strategic
+ * levers, not every block"). A 5th bucket, "other public revenue" (~122
+ * Md€, non-controllable, evolves only via the engine's own growth
+ * elasticity), is NOT a `RevenueBlockId` — it has no tiers and is
+ * computed as a residual for display, see `financeEffects.ts`'s
+ * `otherRevenueEstimate`.
  *
- * Baselines: Social Contributions 615 (~45% of publicRevenue), Consumption
- * /Indirect Taxes 275 (~20%), Household Taxation 245 (~18%), Business
- * Taxation 135 (~10%), Other Revenue 102 (residual) — sum 1372, exactly the
- * calibrated `publicRevenue` in `data/initialState.ts` (M6 §2, do not
- * silently replace the calibrated baseline).
+ * Baselines: Social Contributions 734 (~44.8% of publicRevenue),
+ * Consumption/Indirect Taxes 328 (~20.0%), Household Taxation 293
+ * (~17.9%), Business Taxation 161 (~9.8%), Other Revenue 122 (residual,
+ * ~7.4%) — sum 1,638, exactly the FRANCE 2027 BASELINE `publicRevenue` in
+ * `data/initialState.ts` (M6.1 §1-3, do not silently replace the
+ * documented baseline). The 4 controllable shares are the SAME relative
+ * composition M6 originally used (a proportional carry-forward, not a
+ * re-derivation — France's revenue mix by source has been broadly stable
+ * year to year, unlike the expenditure functional split, so this is not
+ * the "blind proportional scale-up" M6.1 §5 warns against for spending).
  *
  * THE M6 REVENUE FIX (M6 §1, isolated/documented per the brief's own
  * instruction — see `docs/ECONOMY_BUDGET_M6.md`): every tier below sets
@@ -30,7 +36,7 @@ export const REVENUE_BLOCKS: Record<RevenueBlockId, FinanceBlockConfig<RevenueBl
   householdTax: {
     id: 'householdTax',
     label: 'Fiscalité des ménages',
-    baseline: 245,
+    baseline: 293,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -96,7 +102,7 @@ export const REVENUE_BLOCKS: Record<RevenueBlockId, FinanceBlockConfig<RevenueBl
   businessTax: {
     id: 'businessTax',
     label: 'Fiscalité des entreprises',
-    baseline: 135,
+    baseline: 161,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -161,7 +167,7 @@ export const REVENUE_BLOCKS: Record<RevenueBlockId, FinanceBlockConfig<RevenueBl
   consumptionTax: {
     id: 'consumptionTax',
     label: 'Fiscalité de la consommation (TVA, taxes indirectes)',
-    baseline: 275,
+    baseline: 328,
     provenance: 'GAME_ESTIMATE',
     temporaryInflationChannel: true,
     tiers: [
@@ -213,7 +219,7 @@ export const REVENUE_BLOCKS: Record<RevenueBlockId, FinanceBlockConfig<RevenueBl
   socialContributions: {
     id: 'socialContributions',
     label: 'Cotisations sociales',
-    baseline: 615,
+    baseline: 734,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -276,7 +282,7 @@ export const REVENUE_BLOCKS: Record<RevenueBlockId, FinanceBlockConfig<RevenueBl
 export const REVENUE_BLOCK_ORDER: RevenueBlockId[] = ['householdTax', 'businessTax', 'consumptionTax', 'socialContributions']
 
 /** Reference envelope for the non-controllable "other public revenue" bucket — display only, see `financeEffects.ts`'s `otherRevenueEstimate` for how the LIVE figure is derived each turn. */
-export const OTHER_REVENUE_BASELINE = 102
+export const OTHER_REVENUE_BASELINE = 122
 
 export function getRevenueTier(blockId: RevenueBlockId, tierId: string) {
   const tier = REVENUE_BLOCKS[blockId].tiers.find((t) => t.id === tierId)

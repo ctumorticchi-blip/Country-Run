@@ -77,9 +77,13 @@ describe('simulateYearOne', () => {
 
     const turn1Jump = spendingByTurn[0] - start.economic.publicSpending
     const turn2Jump = spendingByTurn[1] - spendingByTurn[0]
-    // Turn 1 absorbs the full +10 (plus organic drift); turn 2 must be a much smaller organic-drift-only move.
+    // Turn 1 absorbs the full +10 (plus organic drift); turn 2 must be a clearly smaller organic-drift-only
+    // move — if the M1.5 bug reoccurred (the +10 re-added every turn), turn2Jump would be close to turn1Jump,
+    // not a fraction of it. The exact ratio floats with the calibrated baseline's own organic spending
+    // growth rate (M6.1's France 2027 baseline is a larger absolute scale than the old placeholder), so this
+    // asserts "clearly smaller", not a fixed 2x — see docs/FRANCE_BASELINE_2027.md.
     expect(turn1Jump).toBeGreaterThan(8)
-    expect(turn2Jump).toBeLessThan(turn1Jump / 2)
+    expect(turn2Jump).toBeLessThan(turn1Jump * 0.65)
   })
 
   it('changing the policy mid-year from +10 to +15 applies only the +5 incremental delta, not the full +15 again', () => {
@@ -95,8 +99,10 @@ describe('simulateYearOne', () => {
 
     const secondTurnJump = afterB.economic.publicSpending - afterA.economic.publicSpending
     // Should reflect roughly +5 (the delta) plus organic drift and interest-cost catch-up (a legitimate,
-    // bounded, multi-turn effect — see M1.5's docs/ECONOMIC_ENGINE.md), nowhere near +15 (the full level) again.
-    expect(secondTurnJump).toBeLessThan(16)
+    // bounded, multi-turn effect — see M1.5's docs/ECONOMIC_ENGINE.md), nowhere near +15 (the full level) again
+    // — the threshold is scaled up for M6.1's larger France 2027 baseline (docs/FRANCE_BASELINE_2027.md),
+    // whose organic per-turn spending drift is proportionally bigger in absolute Md€.
+    expect(secondTurnJump).toBeLessThan(20)
   })
 
   it('economic simulation advances exactly TURNS_PER_YEAR times, never more, regardless of how many times the pure function is called (e.g. React StrictMode double-invoke)', () => {

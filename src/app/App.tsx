@@ -204,11 +204,17 @@ export function App() {
     }
 
     case 'budgetBuilder':
+      if (!state.choices.governmentProfileId) return <div className="cr-root" />
       return (
         <div className="cr-root">
           {nav}
           <BudgetBuilderScreen
             economic={state.gameState.economic}
+            gameState={state.gameState}
+            worldState={state.worldState}
+            seed={state.seed}
+            lastMergedPolicyInput={state.lastMergedPolicyInput}
+            governmentProfileId={state.choices.governmentProfileId}
             budgetLabel={state.currentBudgetLabel ?? 'Budget'}
             financeLevels={state.financeLevels}
             draftSelections={state.draftFinanceSelections}

@@ -154,7 +154,7 @@ describe('policyHistoryEntriesFromFinanceChanges — only built from real change
 
 describe('otherRevenueEstimate — the residual bucket always makes the 5 revenue blocks sum to the real simulated publicRevenue', () => {
   it('at the calibrated baseline, other revenue equals its own reference baseline (nothing has changed yet)', () => {
-    expect(otherRevenueEstimate(economic, NEUTRAL_FINANCE_LEVELS.revenue)).toBeCloseTo(102, 5)
+    expect(otherRevenueEstimate(economic, NEUTRAL_FINANCE_LEVELS.revenue)).toBeCloseTo(122, 5)
   })
 })
 

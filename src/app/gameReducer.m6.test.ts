@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_ECONOMIC_ENGINE_CONFIG } from '../engine/economy/config/defaultConfig.ts'
 import { getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
+import { forecastNextYear } from '../game/country-run/finance/budgetForecast.ts'
+import { computeFinanceChanges, prospectivePolicyForDraft } from '../game/country-run/finance/financeEffects.ts'
 import { activeLedgerEntries, sumActiveLedgerPolicyEffect } from '../game/country-run/finance/fiscalLedger.ts'
+import { deriveGovernmentEngineConfig, fiscalEstimateRangeWidth } from '../game/country-run/government/governmentEffects.ts'
+import { getGovernmentProfile } from '../game/country-run/government/governmentProfiles.ts'
+import { createActionRng } from '../game/country-run/prototype/rng.ts'
 import { createInitialGamePrototypeState, gameReducer, type GameAction, type GamePrototypeState } from './gameReducer.ts'
 
 /**
@@ -199,5 +205,105 @@ describe('M6 §41 fiscal ledger reconciliation — the ledger explains, byte for
     expect(ledgerSum.currentSpendingChanges).toBe(s.implementedReformPolicies.currentSpendingChanges)
     expect(ledgerSum.taxChanges).toBe(s.implementedReformPolicies.taxChanges)
     expect(ledgerSum.businessTaxImpulse).toBe(s.implementedReformPolicies.businessTaxImpulse)
+  })
+})
+
+/**
+ * M6.1 §10, §13: the live "PRÉVISION DE BERCY" (wired into `BudgetBuilderScreen`
+ * via `forecastNextYear`/`prospectivePolicyForDraft`, both PURE) must never
+ * touch real game state, no matter how many times a tier is toggled before
+ * submission. Only `SUBMIT_BUDGET` → an ADOPTED vote may ever change the
+ * real economy/ledger/schedule/promise history.
+ */
+describe('M6.1 §10 forecast purity — toggling Budget Builder tiers back and forth never mutates real state', () => {
+  function computeLiveForecast(state: GamePrototypeState) {
+    const modifiers = getGovernmentProfile(state.choices.governmentProfileId ?? 'reformateurs').modifiers
+    const engineConfig = deriveGovernmentEngineConfig(DEFAULT_ECONOMIC_ENGINE_CONFIG, modifiers)
+    const widthMultiplier = fiscalEstimateRangeWidth(1, modifiers)
+    const changes = computeFinanceChanges(
+      state.draftFinanceSelections.spending,
+      state.financeLevels.spending,
+      state.draftFinanceSelections.revenue,
+      state.financeLevels.revenue,
+    )
+    const prospectivePolicy = prospectivePolicyForDraft(state.lastMergedPolicyInput, changes)
+    return forecastNextYear(state.gameState, state.worldState, engineConfig, prospectivePolicy, state.lastMergedPolicyInput, state.seed, widthMultiplier)
+  }
+
+  it('SET_FINANCE_TIER never touches gameState.economic, the fiscal ledger, scheduled implementations, policyHistory, or promise resolutions', () => {
+    const before = campaignThrough('purity-toggle-check')
+    let state = before
+
+    // Toggle a spending tier and a revenue tier back and forth several times, computing a live forecast
+    // after every single toggle — exactly what the real Budget Builder screen does on every keystroke.
+    for (let i = 0; i < 6; i++) {
+      const healthTier = i % 2 === 0 ? 'hospitalPlan' : 'maintain'
+      const taxTier = i % 2 === 0 ? 'majorIncrease' : 'maintain'
+      state = gameReducer(state, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: 'health', tierId: healthTier })
+      state = gameReducer(state, { type: 'SET_FINANCE_TIER', kind: 'revenue', blockId: 'householdTax', tierId: taxTier })
+      computeLiveForecast(state) // simulates the live re-render — result intentionally discarded
+    }
+
+    expect(state.gameState.economic).toEqual(before.gameState.economic)
+    expect(state.fiscalLedger).toEqual(before.fiscalLedger)
+    expect(state.scheduledImplementations).toEqual(before.scheduledImplementations)
+    expect(state.policyHistory).toEqual(before.policyHistory)
+    expect(state.promiseResolutions).toEqual(before.promiseResolutions)
+    expect(state.implementedReformPolicies).toEqual(before.implementedReformPolicies)
+    expect(state.lastMergedPolicyInput).toEqual(before.lastMergedPolicyInput)
+    expect(state.financeLevels).toEqual(before.financeLevels) // only the DRAFT changed, never the enacted levels
+  })
+
+  it('reverting a tier to its previously-enacted value reproduces the exact same forecast (no residual state)', () => {
+    let state = campaignThrough('purity-revert-check')
+    const baselineForecast = computeLiveForecast(state)
+
+    state = gameReducer(state, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: 'defense', tierId: 'majorIncrease' })
+    computeLiveForecast(state) // a different draft — intentionally discarded
+
+    state = gameReducer(state, { type: 'SET_FINANCE_TIER', kind: 'spending', blockId: 'defense', tierId: 'maintain' })
+    const revertedForecast = computeLiveForecast(state)
+
+    expect(revertedForecast).toEqual(baselineForecast)
+  })
+
+  it('computing a live forecast never consumes the REAL gameplay RNG stream — a subsequent ADVANCE_TURN draws identically whether or not a forecast was computed first', () => {
+    const seed = 'purity-rng-check'
+    const withoutForecast = campaignThrough(seed)
+    const withForecast = campaignThrough(seed)
+
+    // Compute several live forecasts against `withForecast` only — `withoutForecast` never sees this.
+    for (let i = 0; i < 4; i++) computeLiveForecast(withForecast)
+
+    // Reach mandateTurn identically on both branches, then advance one real turn each.
+    let a = gameReducer(withoutForecast, { type: 'SUBMIT_BUDGET' })
+    while (a.activeBill) {
+      a = gameReducer(a, { type: 'CALL_VOTE' })
+      if (a.activeBill && a.activeBill.status === 'REJECTED') a = gameReducer(a, { type: 'RENEGOTIATE_BILL' })
+    }
+    a = gameReducer(a, { type: 'PROCEED_TO_REFORM_HUB' })
+    a = gameReducer(a, { type: 'BEGIN_TURN_LOOP' })
+    a = gameReducer(a, { type: 'ADVANCE_TURN' })
+
+    let b = gameReducer(withForecast, { type: 'SUBMIT_BUDGET' })
+    while (b.activeBill) {
+      b = gameReducer(b, { type: 'CALL_VOTE' })
+      if (b.activeBill && b.activeBill.status === 'REJECTED') b = gameReducer(b, { type: 'RENEGOTIATE_BILL' })
+    }
+    b = gameReducer(b, { type: 'PROCEED_TO_REFORM_HUB' })
+    b = gameReducer(b, { type: 'BEGIN_TURN_LOOP' })
+    b = gameReducer(b, { type: 'ADVANCE_TURN' })
+
+    expect(b.gameState.economic).toEqual(a.gameState.economic)
+  })
+
+  it('the forecast engine itself never draws from a label a real gameplay turn could ever use (isolated seed suffixes)', () => {
+    const state = campaignThrough('rng-namespace-check')
+    // Real gameplay turns are labeled "mandate-turn-N" (turnController.ts); the forecast engine's own
+    // labels are "forecast-turn-N" under a "seed:forecast-a/b/c" sub-seed — provably disjoint strings,
+    // so no RNG label collision between a live forecast and the real simulation is even possible.
+    const realTurnRng = createActionRng(state.seed, 'mandate-turn-1')
+    const forecastRng = createActionRng(`${state.seed}:forecast-a`, 'forecast-turn-1')
+    expect(realTurnRng.next()).not.toBe(forecastRng.next())
   })
 })

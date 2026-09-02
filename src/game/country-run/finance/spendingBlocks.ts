@@ -1,33 +1,33 @@
 import type { FinanceBlockConfig, SpendingBlockId } from './financeTypes.ts'
 
 /**
- * ⚠️ PROTOTYPE CONTENT (M6 §4-16). 9 controllable spending blocks — a
- * reconciled GAMEPLAY decomposition of the calibrated M1.5 starting state
- * (`data/initialState.ts`'s `PLACEHOLDER_ECONOMIC_STATE`), not a literal
- * COFOG/DREES accounting split (M6 §6 explicitly warns against
- * double-counting pensions-vs-social-protection, cross-functional
- * investment, and debt interest inside "general services" — this file
- * avoids all three by construction: pensions and solidarity are separate
- * blocks, investment lives only in `economyInvestment`/`territories`, and
- * debt interest is NOT one of these blocks at all, see
- * `financeEffects.ts`'s `DEBT_INTEREST_BASELINE`).
+ * ⚠️ CONTENT, GAME_ESTIMATE UNLESS NOTED (M6 §4-16, rebaselined M6.1 §5-7).
+ * 9 controllable spending blocks — a reconciled GAMEPLAY decomposition of
+ * the FRANCE 2027 BASELINE (`data/initialState.ts` /
+ * `docs/FRANCE_BASELINE_2027.md`), not a literal COFOG/DREES accounting
+ * split (M6 §6 explicitly warns against double-counting
+ * pensions-vs-social-protection, cross-functional investment, and debt
+ * interest inside "general services" — this file avoids all three by
+ * construction: pensions and solidarity are separate blocks, investment
+ * lives only in `economyInvestment`/`territories`, and debt interest is
+ * NOT one of these blocks at all, see `financeEffects.ts`'s
+ * `DEBT_INTEREST_BASELINE`).
  *
- * Baselines are proportionally scaled from the M6 brief's own reference
- * magnitudes (Pensions ~400, Health ~260, Solidarity ~270, Education ~150,
- * Economy&Investment ~165, Defense ~55, Security ~52,
- * Territories/Housing/Environment/Culture ~115 — sum 1467) down to this
- * project's calibrated `primarySpending` (publicSpending 1512 minus
- * interestCost ≈101 ≈ 1411), so the 9 blocks below reconcile against the
- * SAME starting state M0-M5 already ship rather than silently replacing it
- * (M6 §2). Administration (183) is the one block picked to close the sum
- * exactly rather than scaled — see the reconciliation test in
- * `financeEffects.test.ts`; the ≈0 residual is documented there.
+ * Baselines are anchored to commonly-cited real French functional-spending
+ * orders of magnitude (Pensions ≈390 — COR-reported total pension
+ * expenditure ≈14% GDP; Health ≈270 — ONDAM-scale; Défense 50 — the 2027
+ * LPM 2024-2030 trajectory; the rest GAME_ESTIMATE envelopes sized to feel
+ * plausible at this scale), NOT a blind proportional scale-up of the old
+ * placeholder figures (M6.1 §5's explicit instruction) — administration
+ * (233) is still the one block picked to close the sum exactly against
+ * `primarySpending` (publicSpending 1,796 minus interestCost 76 = 1,720),
+ * see the reconciliation test in `financeEffects.test.ts`.
  */
 export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<SpendingBlockId>> = {
   pensions: {
     id: 'pensions',
     label: 'Retraites',
-    baseline: 335,
+    baseline: 390,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -101,7 +101,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   health: {
     id: 'health',
     label: 'Santé',
-    baseline: 220,
+    baseline: 270,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -171,7 +171,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   solidarity: {
     id: 'solidarity',
     label: 'Solidarité',
-    baseline: 225,
+    baseline: 280,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -237,7 +237,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   education: {
     id: 'education',
     label: 'Éducation',
-    baseline: 125,
+    baseline: 170,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -291,7 +291,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   economyInvestment: {
     id: 'economyInvestment',
     label: 'Économie & investissement',
-    baseline: 140,
+    baseline: 165,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -356,7 +356,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   defense: {
     id: 'defense',
     label: 'Défense',
-    baseline: 45,
+    baseline: 50,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -410,7 +410,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   security: {
     id: 'security',
     label: 'Sécurité',
-    baseline: 43,
+    baseline: 42,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -464,7 +464,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   territories: {
     id: 'territories',
     label: 'Territoires, logement, environnement & culture',
-    baseline: 95,
+    baseline: 120,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {
@@ -527,7 +527,7 @@ export const SPENDING_BLOCKS: Record<SpendingBlockId, FinanceBlockConfig<Spendin
   administration: {
     id: 'administration',
     label: 'Administration',
-    baseline: 183,
+    baseline: 233,
     provenance: 'GAME_ESTIMATE',
     tiers: [
       {

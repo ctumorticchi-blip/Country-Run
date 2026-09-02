@@ -1,9 +1,14 @@
 import { useMemo } from 'react'
-import { computeFinanceChanges } from '../../game/country-run/finance/financeEffects.ts'
+import { DEFAULT_ECONOMIC_ENGINE_CONFIG } from '../../engine/economy/config/defaultConfig.ts'
+import type { EconomicPolicyInput, WorldState } from '../../engine/economy/types.ts'
+import type { EconomicState, GameState } from '../../engine/state/gameState.ts'
+import { forecastNextYear } from '../../game/country-run/finance/budgetForecast.ts'
+import { computeFinanceChanges, prospectivePolicyForDraft } from '../../game/country-run/finance/financeEffects.ts'
 import type { RevenueBlockId, SpendingBlockId } from '../../game/country-run/finance/financeTypes.ts'
 import { REVENUE_BLOCK_ORDER, REVENUE_BLOCKS } from '../../game/country-run/finance/revenueBlocks.ts'
 import { SPENDING_BLOCK_ORDER, SPENDING_BLOCKS } from '../../game/country-run/finance/spendingBlocks.ts'
-import type { EconomicState } from '../../engine/state/gameState.ts'
+import { deriveGovernmentEngineConfig, fiscalEstimateRangeWidth } from '../../game/country-run/government/governmentEffects.ts'
+import { getGovernmentProfile } from '../../game/country-run/government/governmentProfiles.ts'
 import { FinanceBlockCard } from '../components/FinanceBlockCard.tsx'
 import { BudgetSummary } from '../components/BudgetSummary.tsx'
 import { formatMdFr } from '../format.ts'
@@ -11,6 +16,11 @@ import type { FinanceSelectionState } from '../gameReducer.ts'
 
 interface BudgetBuilderScreenProps {
   economic: EconomicState
+  gameState: GameState
+  worldState: WorldState
+  seed: string
+  lastMergedPolicyInput: EconomicPolicyInput
+  governmentProfileId: string
   budgetLabel: string
   financeLevels: FinanceSelectionState
   draftSelections: FinanceSelectionState
@@ -33,6 +43,11 @@ const GLOSSARY: [string, string][] = [
 /** M6 §60-66: HEADER (macro situation) / REVENUE (4 cards) / SPENDING (9 cards) / DEBT (locked) / sticky NOTE DE BERCY summary — progressive disclosure throughout so the screen stays playable on a 390px phone. */
 export function BudgetBuilderScreen({
   economic,
+  gameState,
+  worldState,
+  seed,
+  lastMergedPolicyInput,
+  governmentProfileId,
   budgetLabel,
   financeLevels,
   draftSelections,
@@ -45,6 +60,17 @@ export function BudgetBuilderScreen({
     () => computeFinanceChanges(draftSelections.spending, financeLevels.spending, draftSelections.revenue, financeLevels.revenue),
     [draftSelections, financeLevels],
   )
+
+  // M6.1 §8-10: the LIVE "PRÉVISION DE BERCY" — a PURE read, recomputed whenever the draft changes.
+  // Never dispatches, never touches real game state/RNG/ledger/promise history (see financeEffects.ts's
+  // `prospectivePolicyForDraft` and budgetForecast.ts's own module doc for the purity guarantees).
+  const forecast = useMemo(() => {
+    const modifiers = getGovernmentProfile(governmentProfileId).modifiers
+    const engineConfig = deriveGovernmentEngineConfig(DEFAULT_ECONOMIC_ENGINE_CONFIG, modifiers)
+    const widthMultiplier = fiscalEstimateRangeWidth(1, modifiers)
+    const prospectivePolicy = prospectivePolicyForDraft(lastMergedPolicyInput, changes)
+    return forecastNextYear(gameState, worldState, engineConfig, prospectivePolicy, lastMergedPolicyInput, seed, widthMultiplier)
+  }, [changes, gameState, worldState, seed, lastMergedPolicyInput, governmentProfileId])
 
   return (
     <div className="cr-screen">
@@ -109,7 +135,7 @@ export function BudgetBuilderScreen({
           </div>
         </section>
 
-        <BudgetSummary economic={economic} changes={changes} selectedPromiseIds={selectedPromiseIds} />
+        <BudgetSummary economic={economic} changes={changes} selectedPromiseIds={selectedPromiseIds} forecast={forecast} />
 
         <details className="cr-glossary">
           <summary>Glossaire</summary>
