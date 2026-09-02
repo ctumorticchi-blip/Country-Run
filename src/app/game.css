@@ -4,6 +4,26 @@
  * mobile-first. See docs/GAMEPLAY_M2.md ("UI/UX requirements").
  */
 
+/*
+ * M6.2: global box-sizing reset. `.cr-page` (and a few other components)
+ * set an explicit `width: 100%` alongside horizontal padding — under the
+ * browser default `content-box` model that adds the padding ON TOP of the
+ * 100% width, overflowing the viewport by the padding amount. This was the
+ * actual root cause of the horizontal-overflow/clipped-content mobile bug
+ * (§5 of the M6.2 brief) — `border-box` makes width:100%+padding fit
+ * exactly, everywhere, without touching individual containers.
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
 :root {
   --navy-950: #0a1220;
   --navy-900: #0f1b30;
@@ -117,7 +137,8 @@
 
 .cr-small-text {
   color: var(--off-white-dim);
-  font-size: 0.8rem;
+  /* M6.2 §12: secondary text floor ~13px. */
+  font-size: 0.85rem;
   margin-top: 0.9rem;
 }
 
@@ -130,9 +151,11 @@
 }
 
 .cr-title {
-  font-size: clamp(1.4rem, 4vw, 2rem);
+  /* M6.2 §12: 24-28px page-title floor/ceiling, so it never shrinks below a comfortable reading size on a narrow phone. */
+  font-size: clamp(1.5rem, 4vw, 1.75rem);
   font-weight: 800;
   margin: 0.35rem 0 0.6rem;
+  line-height: 1.25;
 }
 
 .cr-body-text {
@@ -500,6 +523,178 @@
   gap: 0.4rem;
 }
 
+/*
+ * ---------- M6.2: mobile Note de Bercy — compact bar + full-screen sheet ----------
+ * Mobile-first: below 768px, `.cr-bercy-compact` is the ONLY persistent
+ * Bercy element (max ~130px tall) and `.cr-bercy-panel` stays off-screen
+ * until `--open`, when it becomes a full-screen sheet. At ≥768px this
+ * flips: the compact bar and backdrop disappear entirely and the full
+ * panel reverts to M6.1's always-visible sticky-at-bottom desktop summary.
+ */
+
+.cr-bercy-compact {
+  position: fixed;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  z-index: 30;
+  max-height: 150px;
+  background: var(--navy-900);
+  border: 1px solid var(--blue-accent);
+  border-radius: var(--radius-lg);
+  padding: 0.65rem 0.9rem;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.cr-bercy-compact__stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.cr-bercy-compact__label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--off-white-dim);
+}
+
+.cr-bercy-compact__value {
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cr-bercy-compact__deficit {
+  font-size: 0.78rem;
+  color: var(--off-white-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.cr-bercy-compact__toggle {
+  flex: 0 0 auto;
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--blue-accent), #7aa0ff);
+  color: #06101f;
+  font-weight: 800;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  padding: 0.6rem 1rem;
+  min-height: 44px;
+  min-width: 44px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* Reserves room at the true end of the page so the fixed compact bar never covers the last budget card or the submit CTA (§16-17). */
+.cr-bercy-bar-spacer {
+  height: calc(150px + env(safe-area-inset-bottom, 0px));
+}
+
+.cr-bercy-panel {
+  display: none;
+}
+
+.cr-bercy-panel--open {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--navy-950);
+  height: 100vh;
+  height: 100dvh;
+  padding: calc(0.9rem + env(safe-area-inset-top, 0px)) 1.1rem 0;
+}
+
+.cr-bercy-panel__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--navy-700);
+}
+
+.cr-bercy-panel__close {
+  appearance: none;
+  border: 1px solid var(--navy-600);
+  background: var(--navy-800);
+  color: var(--off-white);
+  border-radius: 999px;
+  padding: 0.5rem 1rem;
+  min-height: 44px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cr-bercy-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding-bottom: calc(1.1rem + env(safe-area-inset-bottom, 0px));
+}
+
+.cr-bercy-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgba(4, 8, 16, 0.6);
+}
+
+@media (min-width: 768px) {
+  .cr-bercy-compact,
+  .cr-bercy-backdrop {
+    display: none;
+  }
+
+  .cr-bercy-bar-spacer {
+    display: none;
+  }
+
+  .cr-bercy-panel,
+  .cr-bercy-panel--open {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    position: sticky;
+    inset: auto;
+    bottom: 0.75rem;
+    height: auto;
+    z-index: auto;
+    background: var(--navy-900);
+    border: 1px solid var(--navy-600);
+    border-radius: var(--radius-lg);
+    padding: 1rem 1.1rem;
+    box-shadow: var(--shadow-card);
+  }
+
+  .cr-bercy-panel__header {
+    display: none;
+  }
+
+  .cr-bercy-panel__body {
+    overflow: visible;
+    padding-bottom: 0;
+    gap: 0.55rem;
+  }
+}
+
 /* ---------- M6 finance blocks (progressive disclosure) ---------- */
 
 .cr-section-title {
@@ -716,18 +911,25 @@
 .cr-navbar {
   display: flex;
   gap: 0.4rem;
-  padding: 0.6rem 0.75rem;
+  padding: calc(0.6rem + env(safe-area-inset-top, 0px)) 0.75rem 0.6rem;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   background: var(--navy-900);
   border-bottom: 1px solid var(--navy-700);
   position: sticky;
   top: 0;
   z-index: 5;
+  /* M6.2 §6: a soft edge fade signals the bar keeps scrolling horizontally, without shrinking any tab's text or risking one becoming unreachable. */
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 14px, black calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, black 14px, black calc(100% - 14px), transparent 100%);
 }
 
 .cr-navbar__item {
   flex: 0 0 auto;
   padding: 0.45rem 0.85rem;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
   border-radius: 999px;
   border: 1px solid var(--navy-700);
   background: var(--navy-800);

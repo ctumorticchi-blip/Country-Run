@@ -188,6 +188,25 @@ export function prospectivePolicyForDraft(lastMergedPolicyInput: EconomicPolicyI
   return mergePolicyDeltas(lastMergedPolicyInput, sumFinanceChangeEffects(changes))
 }
 
+/**
+ * M6.2 §10: several tiers across different blocks can share the exact same
+ * `riskDescription` (e.g. household tax's and business tax's "majorIncrease"
+ * tiers both warn about breaking a no-tax-increase promise) — never render
+ * that string once per contributing block. Groups changes by their literal
+ * risk text and, when more than one block shares it, names the contributing
+ * blocks in parentheses instead of repeating the sentence.
+ */
+export function dedupeRisks(changes: readonly FinanceBlockChange[]): string[] {
+  const blocksByRisk = new Map<string, string[]>()
+  for (const c of changes) {
+    if (!c.riskDescription) continue
+    const labels = blocksByRisk.get(c.riskDescription) ?? []
+    if (!labels.includes(c.blockLabel)) labels.push(c.blockLabel)
+    blocksByRisk.set(c.riskDescription, labels)
+  }
+  return [...blocksByRisk.entries()].map(([risk, labels]) => (labels.length > 1 ? `${risk} (${labels.join(', ')})` : risk))
+}
+
 export interface BudgetEquation {
   revenueBn: number
   spendingBn: number

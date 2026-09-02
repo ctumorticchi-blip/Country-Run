@@ -154,6 +154,9 @@ export function BudgetBuilderScreen({
             SOUMETTRE LE BUDGET AU PARLEMENT
           </button>
         </div>
+
+        {/* M6.2 §16-17: reserves space so the fixed mobile compact Bercy bar never covers this button. */}
+        <div className="cr-bercy-bar-spacer" aria-hidden="true" />
       </div>
     </div>
   )

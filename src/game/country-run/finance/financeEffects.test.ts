@@ -4,6 +4,7 @@ import {
   computeBudgetEquation,
   computeFinanceChanges,
   DEBT_INTEREST_BASELINE,
+  dedupeRisks,
   diffPolicyEffect,
   NEUTRAL_FINANCE_LEVELS,
   otherRevenueEstimate,
@@ -187,5 +188,49 @@ describe('REVENUE_BLOCK_ORDER / SPENDING_BLOCK_ORDER — exactly the counts M6 �
   it('9 controllable spending blocks, 4 controllable revenue blocks', () => {
     expect(SPENDING_BLOCK_ORDER).toHaveLength(9)
     expect(REVENUE_BLOCK_ORDER).toHaveLength(4)
+  })
+})
+
+describe('dedupeRisks (M6.2 §10) — never render the exact same risk sentence once per contributing block', () => {
+  it('collapses an identical riskDescription shared by household tax and business tax into ONE entry naming both blocks', () => {
+    const changes = computeFinanceChanges(
+      NEUTRAL_FINANCE_LEVELS.spending,
+      NEUTRAL_FINANCE_LEVELS.spending,
+      { ...NEUTRAL_FINANCE_LEVELS.revenue, householdTax: 'targetedIncrease', businessTax: 'targetedIncrease' },
+      NEUTRAL_FINANCE_LEVELS.revenue,
+    )
+    // Both tiers carry the exact same sentence — confirm the fixture actually exercises the duplicate case.
+    const rawRisks = changes.map((c) => c.riskDescription).filter((r): r is string => r !== undefined)
+    expect(rawRisks).toEqual(['Rompt tout engagement de non-augmentation des impôts.', 'Rompt tout engagement de non-augmentation des impôts.'])
+
+    const risks = dedupeRisks(changes)
+    expect(risks).toHaveLength(1)
+    expect(risks[0]).toBe('Rompt tout engagement de non-augmentation des impôts. (Fiscalité des ménages, Fiscalité des entreprises)')
+  })
+
+  it('leaves a single-block risk untouched (no parenthetical block list)', () => {
+    const changes = computeFinanceChanges(
+      NEUTRAL_FINANCE_LEVELS.spending,
+      NEUTRAL_FINANCE_LEVELS.spending,
+      { ...NEUTRAL_FINANCE_LEVELS.revenue, householdTax: 'targetedIncrease' },
+      NEUTRAL_FINANCE_LEVELS.revenue,
+    )
+    expect(dedupeRisks(changes)).toEqual(['Rompt tout engagement de non-augmentation des impôts.'])
+  })
+
+  it('keeps genuinely different risk sentences distinct', () => {
+    const changes = computeFinanceChanges(
+      NEUTRAL_FINANCE_LEVELS.spending,
+      NEUTRAL_FINANCE_LEVELS.spending,
+      { ...NEUTRAL_FINANCE_LEVELS.revenue, householdTax: 'majorCut', businessTax: 'targetedIncrease' },
+      NEUTRAL_FINANCE_LEVELS.revenue,
+    )
+    const risks = dedupeRisks(changes)
+    expect(risks).toHaveLength(2)
+    expect(new Set(risks).size).toBe(2)
+  })
+
+  it('returns an empty array when nothing has a risk description', () => {
+    expect(dedupeRisks([])).toEqual([])
   })
 })

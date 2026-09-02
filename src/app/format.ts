@@ -72,3 +72,13 @@ export function formatSignedPercentFr(value: number, decimals = 1): string {
   const sign = value >= 0 ? '+' : ''
   return `${sign}${formatPercentFr(value, decimals)}`
 }
+
+/**
+ * M6.2 §11: collapse a forecast range into a single value once its two
+ * player-facing (already-rounded/formatted) endpoints read identically —
+ * never show a fake "7,9–7,9 %" range. Pure presentation only; the
+ * underlying low/high forecast numbers are never touched.
+ */
+export function formatRange(lowText: string, highText: string, dash = '–'): string {
+  return lowText === highText ? lowText : `${lowText}${dash}${highText}`
+}
