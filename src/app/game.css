@@ -164,6 +164,20 @@ body {
   font-size: 0.98rem;
 }
 
+/* M6.5 §49/Part VII: the "CONSÉQUENCE DE VOTRE DÉCISION DE [year]" causal follow-up tag. */
+.cr-followup-tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber-warn);
+  border: 1px solid var(--amber-warn);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  margin: 0.2rem 0 0.4rem;
+}
+
 /* ---------- Buttons ---------- */
 
 .cr-button {
@@ -1073,6 +1087,23 @@ body {
   height: 10px;
   border-radius: 999px;
   margin-right: 0.5rem;
+}
+
+/* ---------- M6.5 national projects ---------- */
+
+.cr-project-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.cr-project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
 }
 
 /* ---------- Mandate start recap ---------- */

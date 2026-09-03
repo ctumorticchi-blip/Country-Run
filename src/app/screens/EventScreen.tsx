@@ -6,10 +6,12 @@ interface EventScreenProps {
   lastChoice: { choiceId: string; immediateFeedback: string } | null
   onChoose: (choiceId: string) => void
   onContinue: () => void
+  /** M6.5 §49/§Part VII: the calendar year the arc's OPENING episode fired, when this event is a follow-up (`arcStage >= 2`) — `null`/`undefined` for a standalone or opening episode. */
+  followUpYear?: number | null
 }
 
 /** M5 §7-10, §43: one fired `EventDefinition`'s player choice — the SAME turn's economic step has already run by the time this screen shows (`beginMandateTurn` doesn't wait on the player's pick), so choices here affect FUTURE turns, never this one retroactively. */
-export function EventScreen({ event, lastChoice, onChoose, onContinue }: EventScreenProps) {
+export function EventScreen({ event, lastChoice, onChoose, onContinue, followUpYear }: EventScreenProps) {
   if (lastChoice) {
     const choice = event.choices.find((c) => c.id === lastChoice.choiceId)
     return (
@@ -34,6 +36,7 @@ export function EventScreen({ event, lastChoice, onChoose, onContinue }: EventSc
     <div className="cr-screen">
       <div className="cr-page">
         <p className="cr-eyebrow">Événement</p>
+        {followUpYear ? <p className="cr-followup-tag">CONSÉQUENCE DE VOTRE DÉCISION DE {followUpYear}</p> : null}
         <h1 className="cr-title">{event.title}</h1>
         <p className="cr-body-text">{event.description}</p>
 

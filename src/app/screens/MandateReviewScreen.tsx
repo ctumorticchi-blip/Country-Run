@@ -2,9 +2,12 @@ import { useState } from 'react'
 import type { EconomicState } from '../../engine/state/gameState.ts'
 import { computePrimaryBalance } from '../../game/country-run/finance/primaryBalance.ts'
 import type { EndingTitle, FinalScoreBreakdown } from '../../game/country-run/mandate/finalScoring.ts'
+import { netValueCreated } from '../../game/country-run/fund/fundEngine.ts'
+import type { SovereignFundState } from '../../game/country-run/fund/fundTypes.ts'
+import type { NationalProject } from '../../game/country-run/projects/projectTypes.ts'
 import { getPromiseDefinition } from '../../game/country-run/promises/promiseCatalog.ts'
 import type { PromiseResolution } from '../../game/country-run/promises/promiseResolution.ts'
-import { formatMdFr, formatPercent, purchasingPowerIndex } from '../format.ts'
+import { formatMdFr, formatPercent, formatSignedMdFr, purchasingPowerIndex } from '../format.ts'
 
 interface MandateReviewScreenProps {
   initialEconomic: EconomicState
@@ -14,6 +17,8 @@ interface MandateReviewScreenProps {
   promiseResolutions: PromiseResolution[]
   scoreBreakdown: FinalScoreBreakdown
   endingTitle: EndingTitle
+  projects: readonly NationalProject[]
+  sovereignFund: SovereignFundState
   onNewGame: () => void
 }
 
@@ -60,6 +65,8 @@ export function MandateReviewScreen({
   promiseResolutions,
   scoreBreakdown,
   endingTitle,
+  projects,
+  sovereignFund,
   onNewGame,
 }: MandateReviewScreenProps) {
   const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'shared'>('idle')
@@ -133,6 +140,32 @@ export function MandateReviewScreen({
             </div>
           ))}
         </div>
+
+        <div className="cr-card">
+          <p className="cr-eyebrow">Ce que vous avez construit</p>
+          {projects.length === 0 ? (
+            <p className="cr-body-text">Aucun grand projet national n’a été engagé durant ce mandat.</p>
+          ) : (
+            <ul className="cr-recap-list">
+              {projects.map((project) => (
+                <li key={project.id} className="cr-report-row">
+                  <span className="cr-report-row__label">{project.name}</span>
+                  <span className="cr-report-row__value">{project.status === 'COMPLETED' ? 'Achevé' : `${String(project.progress)}% avancé`}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {sovereignFund.exists ? (
+          <div className="cr-card">
+            <p className="cr-eyebrow">Fonds Souverain France — bilan</p>
+            {reportRow('Capital apporté', formatMdFr(sovereignFund.capitalContributed), formatMdFr(sovereignFund.capitalContributed))}
+            {reportRow('Valeur du portefeuille', '—', formatMdFr(sovereignFund.portfolioValue))}
+            {reportRow('Dividendes versés à l’État', '—', formatMdFr(sovereignFund.cumulativeDividendsToState))}
+            {reportRow('Valeur nette créée', '—', formatSignedMdFr(netValueCreated(sovereignFund)))}
+          </div>
+        ) : null}
 
         <div className="cr-card">
           <p className="cr-eyebrow">Mes 5 engagements — bilan final</p>

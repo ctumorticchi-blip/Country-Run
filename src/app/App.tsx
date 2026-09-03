@@ -5,7 +5,8 @@ import type { RevenueBlockId, SpendingBlockId } from '../game/country-run/financ
 import type { PromiseEvaluationContext } from '../game/country-run/promises/promiseTypes.ts'
 import { getGovernmentProfile } from '../game/country-run/government/governmentProfiles.ts'
 import { getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
-import { isMidtermTurn } from '../game/country-run/mandate/calendar.ts'
+import { memoriesForArc } from '../engine/events/memory.ts'
+import { isMidtermTurn, turnToDate } from '../game/country-run/mandate/calendar.ts'
 import { BUDGET_BILL_ID } from '../game/country-run/parliament/budgetBillDerivation.ts'
 import { MAX_VOTE_ATTEMPTS } from '../game/country-run/parliament/billTypes.ts'
 import { applyConcessionsToBill } from '../game/country-run/parliament/concessions.ts'
@@ -68,7 +69,7 @@ export function App() {
     return (
       <div className="cr-root">
         <NavBar activeTab={detailTab} onSelect={(tab) => { setDetailTab(tab === detailTab ? null : tab) }} />
-        <DetailPanel tab={detailTab} state={state} onClose={() => { setDetailTab(null) }} />
+        <DetailPanel tab={detailTab} state={state} dispatch={dispatch} onClose={() => { setDetailTab(null) }} />
       </div>
     )
   }
@@ -335,12 +336,22 @@ export function App() {
     case 'event': {
       if (!state.activeEventId) return <div className="cr-root" />
       const event = getEventDefinition(state.activeEventId)
+      // M6.5 §49/Part VII: for a follow-up episode (arcStage >= 2), label it with the calendar
+      // year the arc's OPENING choice was made — "only say it when mechanically true".
+      const followUpYear =
+        event.arcId && event.arcStage && event.arcStage > 1
+          ? (() => {
+              const arcMemories = memoriesForArc(state.eventMemories, event.arcId)
+              return arcMemories.length > 0 ? turnToDate(arcMemories[0].turn).startYear : null
+            })()
+          : null
       return (
         <div className="cr-root">
           {nav}
           <EventScreen
             event={event}
             lastChoice={state.lastEventChoice}
+            followUpYear={followUpYear}
             onChoose={(choiceId) => { dispatch({ type: 'CHOOSE_EVENT', choiceId }) }}
             onContinue={() => { dispatch({ type: 'CONTINUE_AFTER_EVENT' }) }}
           />
@@ -383,6 +394,8 @@ export function App() {
             promiseResolutions={state.promiseResolutions}
             scoreBreakdown={state.finalScoreBreakdown}
             endingTitle={state.endingTitle}
+            projects={state.projects}
+            sovereignFund={state.sovereignFund}
             onNewGame={() => { dispatch({ type: 'NEW_GAME' }) }}
           />
         </div>
