@@ -1,6 +1,7 @@
 import { DEFAULT_ECONOMIC_ENGINE_CONFIG } from '../engine/economy/config/defaultConfig.ts'
 import { applyEffect } from '../engine/effects/apply.ts'
-import { NEUTRAL_POLICY_INPUT, type EconomicPolicyInput, type WorldState } from '../engine/economy/types.ts'
+import { NEUTRAL_POLICY_INPUT, type EconomicPolicyInput, type ExternalShock, type WorldState } from '../engine/economy/types.ts'
+import { recordEventMemory, type EventMemory } from '../engine/events/memory.ts'
 import type { EconomicState, GameState } from '../engine/state/gameState.ts'
 import {
   computeFinanceChanges,
@@ -16,7 +17,7 @@ import { driftServiceIndices } from '../game/country-run/finance/serviceIndices.
 import { getSpendingTier } from '../game/country-run/finance/spendingBlocks.ts'
 import { createInitialGameState } from '../game/country-run/data/initialState.ts'
 import { createInitialWorldState } from '../game/country-run/data/initialWorldState.ts'
-import { budgetLabelForYearStartTurn } from '../game/country-run/mandate/calendar.ts'
+import { budgetLabelForYearStartTurn, isYearEndTurn, turnToGameplayYear } from '../game/country-run/mandate/calendar.ts'
 import { computeEconomicSentimentDelta } from '../game/country-run/mandate/economicSentiment.ts'
 import { recordSnapshot, snapshotFrom, type EconomicSnapshot } from '../game/country-run/mandate/economicSnapshots.ts'
 import { computeEndingTitle, computeFinalScore, type EndingTitle, type FinalScoreBreakdown } from '../game/country-run/mandate/finalScoring.ts'
@@ -59,7 +60,7 @@ import { getGovernmentProfile } from '../game/country-run/government/governmentP
 import type { GovernmentModifiers } from '../game/country-run/government/governmentTypes.ts'
 import { EVENT_CATALOG, getEventDefinition } from '../game/country-run/events/eventCatalog.ts'
 import type { EventChoice, EventDefinition } from '../game/country-run/events/eventTypes.ts'
-import { getBlocDefinition } from '../game/country-run/parliament/blocDefinitions.ts'
+import { getBlocDefinition, PARLIAMENT_BLOC_DEFINITIONS } from '../game/country-run/parliament/blocDefinitions.ts'
 import { adjustRelation, RELATIONSHIP_EFFECTS, type BlocRelations } from '../game/country-run/parliament/blocRelations.ts'
 import { BUDGET_BILL_ID, deriveBudgetBill } from '../game/country-run/parliament/budgetBillDerivation.ts'
 import { BILL_CATALOG, getBillDefinition } from '../game/country-run/parliament/bills.ts'
@@ -72,13 +73,19 @@ import { createDeal, markDealFulfilled, type PoliticalDeal } from '../game/count
 import type { ConcessionType } from '../game/country-run/parliament/politicalTypes.ts'
 import { estimateBillSupport } from '../game/country-run/parliament/supportEstimate.ts'
 import { resolveVote, type VoteResult } from '../game/country-run/parliament/voteResolution.ts'
+import { budgetRejectionShock, BUDGET_REJECTION_EXTRA_CAPITAL_PENALTY } from '../game/country-run/parliament/budgetRejection.ts'
+import { governmentCrisisConsequence, governmentCrisisTriggered } from '../game/country-run/mandate/governmentCrisis.ts'
+import { advanceProjects, launchProject, projectTemplateForBill, projectTemplateForEventChoice, projectTemplateForFinanceTier } from '../game/country-run/projects/projectEngine.ts'
+import type { NationalProject } from '../game/country-run/projects/projectTypes.ts'
+import { acquireStake, applyAnnualReturn, canRecapitalize, createSovereignFund, fundCreationConsequence, recapitalize, transferDividendToState } from '../game/country-run/fund/fundEngine.ts'
+import { NO_SOVEREIGN_FUND, type SovereignFundFundingSource, type SovereignFundGovernance, type SovereignFundState, type SovereignFundStrategy } from '../game/country-run/fund/fundTypes.ts'
 import { PROMISE_CATALOG } from '../game/country-run/promises/promiseCatalog.ts'
 import { resolveDuePromises, type PromiseResolution } from '../game/country-run/promises/promiseResolution.ts'
 import { coherenceScore, isCompleteSelection, REQUIRED_PROMISE_COUNT } from '../game/country-run/promises/promiseSelection.ts'
 import type { PromiseEvaluationContext } from '../game/country-run/promises/promiseTypes.ts'
 
 /** Bumped whenever the serialized shape of `GamePrototypeState` changes; no migration logic exists yet — an incompatible save fails safely to a new game (see save.ts). M6 bumps this: the whole finance layer (`budgetLevels`/`draftBudgetSelections` -> `financeLevels`/`draftFinanceSelections`, plus new `fiscalLedger`/`serviceIndices` fields) is a breaking shape change. */
-export const GAME_VERSION = '0.6.0'
+export const GAME_VERSION = '0.6.5'
 
 /** Flat capital cost of a single SEEK_SUPPORT outreach action (M4 §12) — cheap relative to a full concession, so courting stays a real but minor lever. */
 export const SEEK_SUPPORT_CAPITAL_COST = 2
@@ -138,6 +145,21 @@ export interface GamePrototypeState {
   billHistory: BillHistoryEntry[]
   politicalDeals: PoliticalDeal[]
   policyHistory: PolicyHistoryEntry[]
+  /** M6.5 §21: exceptional-procedure usage count, this mandate — each additional use costs/escalates more (see `exceptionalProcedure.ts`). */
+  exceptionalProcedureUsageCount: number
+  /** M6.5 §22: a lightweight counter, never a full collapse simulation — see `governmentCrisis.ts`. */
+  governmentCrisisCount: number
+  /**
+   * M6.5 §47: one-off `ExternalShock`s (budget rejection, a repeated
+   * exceptional procedure, a fund/project event) queued to apply on the
+   * NEXT turn only — consumed and cleared by `advanceTurnAction`. Reuses
+   * `beginMandateTurn`'s existing `shocks[]` engine mechanism.
+   */
+  pendingShocks: ExternalShock[]
+  /** M6.5 §24-32: visible national projects — see `projects/projectTypes.ts`'s module doc for why this never double-counts the fiscal ledger. */
+  projects: NationalProject[]
+  /** M6.5 §33-46: FONDS SOUVERAIN FRANCE — `NO_SOVEREIGN_FUND` (exists: false) until the player explicitly creates it. */
+  sovereignFund: SovereignFundState
 
   /** Set once from the Bercy audit choice (M5 §11 keeps this the one fixed pre-mandate decision) — never changes again. */
   bercyPolicyEffect: Partial<EconomicPolicyInput>
@@ -173,6 +195,8 @@ export interface GamePrototypeState {
   currentBudgetLabel: string | null
   /** ids of events already resolved this run — event eligibility never repeats a one-shot event (M5 §24). */
   firedEventIds: string[]
+  /** M6.5 §2: the full history of every event choice made — see `engine/events/memory.ts`'s `EventMemory` and `eventTypes.ts`'s `EventEligibilityContext.eventMemories` doc comments. */
+  eventMemories: EventMemory[]
   /** The event currently awaiting the player's choice, if any (3-layer split: this is only a pointer into `EVENT_CATALOG`). */
   activeEventId: string | null
   lastEventChoice: { eventId: string; eventTitle: string; choiceId: string; immediateFeedback: string } | null
@@ -221,6 +245,15 @@ export type GameAction =
   | { type: 'CONTINUE_FROM_YEAR_REVIEW' }
   | { type: 'NEW_GAME' }
   | { type: 'RESUME_SAVED_GAME'; savedState: GamePrototypeState }
+  | {
+      type: 'CREATE_SOVEREIGN_FUND'
+      capitalization: number
+      fundingSource: SovereignFundFundingSource
+      strategy: SovereignFundStrategy
+      governance: SovereignFundGovernance
+    }
+  | { type: 'RECAPITALIZE_FUND'; amount: number }
+  | { type: 'FUND_TRANSFER_DIVIDEND'; amount: number }
 
 function findDecisionChoice(decision: DecisionConfig, choiceId: string) {
   const choice = decision.choices.find((c) => c.id === choiceId)
@@ -290,6 +323,11 @@ function freshRunState(
     billHistory: [],
     politicalDeals: [],
     policyHistory: [],
+    exceptionalProcedureUsageCount: 0,
+    governmentCrisisCount: 0,
+    pendingShocks: [],
+    projects: [],
+    sovereignFund: { ...NO_SOVEREIGN_FUND },
     bercyPolicyEffect: {},
     implementedReformPolicies: {},
     scheduledImplementations: [],
@@ -300,6 +338,7 @@ function freshRunState(
     serviceIndices: { ...NEUTRAL_SERVICE_INDICES },
     currentBudgetLabel: null,
     firedEventIds: [],
+    eventMemories: [],
     activeEventId: null,
     lastEventChoice: null,
     promiseResolutions: [],
@@ -328,6 +367,81 @@ function nudgePoliticalWithGovernment(state: GameState, rawPopularityDelta: numb
   const modifiers = governmentProfileId ? getGovernmentProfile(governmentProfileId).modifiers : null
   const popularityDelta = modifiers ? applyPopularityResilience(rawPopularityDelta, modifiers) : rawPopularityDelta
   return nudgePolitical(state, popularityDelta, credibilityDelta)
+}
+
+/**
+ * M6.5 §34-35: a one-off, persistent debt-STOCK nudge — used ONLY by the
+ * sovereign fund's creation/recapitalization/dividend-transfer, which are
+ * genuine asset swaps or debt paydowns, never ordinary consumption (see
+ * `fundEngine.ts`'s `fundCreationConsequence` doc comment). `debt` is a
+ * persisted stock the engine carries forward turn to turn (unlike a FLOW
+ * field like `publicRevenue`, which the engine recomputes fresh every
+ * turn and would silently discard a direct nudge) — `debtRatio` is
+ * recomputed alongside it so the dashboard stays internally consistent
+ * within the same turn, not just after the engine's next step.
+ */
+function applyDebtDelta(state: GameState, delta: number): GameState {
+  if (delta === 0) return state
+  const next = applyEffect(state, { type: 'add', path: 'economic.debt', value: delta, min: 0 })
+  const debtRatioDelta = (delta / next.economic.nominalGdp) * 100
+  return applyEffect(next, { type: 'add', path: 'economic.debtRatio', value: debtRatioDelta, min: 0 })
+}
+
+function resolveCreateSovereignFund(
+  state: GamePrototypeState,
+  capitalization: number,
+  fundingSource: SovereignFundFundingSource,
+  strategy: SovereignFundStrategy,
+  governance: SovereignFundGovernance,
+): GamePrototypeState {
+  if (state.sovereignFund.exists) return state
+  const consequence = fundCreationConsequence(capitalization, fundingSource)
+  const gameState = nudgePoliticalWithGovernment(
+    applyDebtDelta(state.gameState, consequence.debtDelta),
+    consequence.popularityDelta,
+    state.choices.governmentProfileId,
+  )
+  const sovereignFund = createSovereignFund(capitalization, fundingSource, strategy, governance, state.gameState.meta.turn)
+  const entry: PolicyHistoryEntry = {
+    turn: state.gameState.meta.turn,
+    sourceId: 'sovereign-fund:created',
+    label: `FONDS SOUVERAIN FRANCE créé — ${String(capitalization)} Md€`,
+    amount: capitalization,
+  }
+  return { ...state, gameState, sovereignFund, policyHistory: appendPolicyHistory(state.policyHistory, entry) }
+}
+
+/**
+ * M6.5 §22: called after ANY reducer step that can move `governmentTension`
+ * or `exceptionalProcedureUsageCount` (a bill vote, the exceptional
+ * procedure, an event choice) — compares `prevState` against the
+ * about-to-be-returned `nextState` and, only on the turn the trigger is
+ * first crossed (never every turn tension merely stays high), applies the
+ * lightweight crisis consequence and bumps `governmentCrisisCount`.
+ */
+function applyGovernmentCrisisIfTriggered(prevState: GamePrototypeState, nextState: GamePrototypeState): GamePrototypeState {
+  const triggered = governmentCrisisTriggered({
+    tensionBefore: prevState.governmentTension,
+    tensionAfter: nextState.governmentTension,
+    exceptionalProcedureUsageCountBefore: prevState.exceptionalProcedureUsageCount,
+    exceptionalProcedureUsageCountAfter: nextState.exceptionalProcedureUsageCount,
+  })
+  if (!triggered) return nextState
+
+  const consequence = governmentCrisisConsequence()
+  let blocRelations = nextState.blocRelations
+  for (const blocId of PARLIAMENT_BLOC_DEFINITIONS) {
+    if (blocId.id === 'PRESIDENTIAL_BLOC') continue
+    blocRelations = adjustRelation(blocRelations, blocId.id, consequence.relationDeltaAllBlocs)
+  }
+
+  return {
+    ...nextState,
+    gameState: nudgePoliticalWithGovernment(nextState.gameState, consequence.popularityDelta, nextState.choices.governmentProfileId),
+    politicalCapital: clampPoliticalCapital(applyCapitalDelta(nextState.politicalCapital ?? 0, consequence.politicalCapitalDelta)),
+    blocRelations,
+    governmentCrisisCount: nextState.governmentCrisisCount + 1,
+  }
 }
 
 /**
@@ -580,6 +694,30 @@ export function gameReducer(state: GamePrototypeState, action: GameAction): Game
       }
     }
 
+    case 'CREATE_SOVEREIGN_FUND':
+      return resolveCreateSovereignFund(state, action.capitalization, action.fundingSource, action.strategy, action.governance)
+
+    case 'RECAPITALIZE_FUND': {
+      if (!state.sovereignFund.exists || !canRecapitalize(state.sovereignFund, state.gameState.meta.turn)) return state
+      const consequence = fundCreationConsequence(action.amount, state.sovereignFund.fundingSource)
+      return {
+        ...state,
+        gameState: applyDebtDelta(state.gameState, consequence.debtDelta),
+        sovereignFund: recapitalize(state.sovereignFund, action.amount, state.gameState.meta.turn),
+      }
+    }
+
+    case 'FUND_TRANSFER_DIVIDEND': {
+      if (!state.sovereignFund.exists) return state
+      const result = transferDividendToState(state.sovereignFund, action.amount)
+      if (result.transferredAmount <= 0) return state
+      // M6.5 §42: a transferred dividend has a LASTING effect only if applied to a persistent
+      // STOCK — `publicRevenue` is a recomputed FLOW (would be silently overwritten next turn), so
+      // this is modeled as the state using the gain to pay down debt (a real, common sovereign-fund
+      // practice), via the same one-off debt-stock nudge fund creation/recapitalization already use.
+      return { ...state, gameState: applyDebtDelta(state.gameState, -result.transferredAmount), sovereignFund: result.fund }
+    }
+
     case 'NEW_GAME':
       return freshRunState(generateSeed(), 'landing')
 
@@ -714,6 +852,7 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     state.gameState.political.popularity,
     modifiers,
     { courtedBlocIds: state.activeBill.courtedBlocIds, capitalSpent: state.activeBill.capitalSpent },
+    state.politicalDeals,
   )
 
   const popularityDelta = popularityDeltaFromBillOutcome(voteResult.passed, effectiveBill.definition.controversy)
@@ -755,6 +894,7 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
   let scheduledImplementations = state.scheduledImplementations
   let fiscalLedger = state.fiscalLedger
   let policyHistory = state.policyHistory
+  let projects = state.projects
 
   if (isBudgetBill && status === 'ADOPTED') {
     const applied = applyAdoptedBudget(state, effectiveBill, definition)
@@ -762,6 +902,27 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     scheduledImplementations = applied.scheduledImplementations
     fiscalLedger = applied.fiscalLedger
     policyHistory = applied.policyHistory
+
+    // M6.5 §26: a specific budget tier's ADOPTION can launch a national project — no new fiscal
+    // channel (the tier's own fiscal effect is already booked above via applyAdoptedBudget).
+    const budgetChanges = computeFinanceChanges(
+      state.draftFinanceSelections.spending,
+      state.financeLevels.spending,
+      state.draftFinanceSelections.revenue,
+      state.financeLevels.revenue,
+    )
+    for (const change of budgetChanges) {
+      const template = projectTemplateForFinanceTier(change.blockId, change.newTierId, projects)
+      if (template) {
+        const project = launchProject(template.id, state.gameState.meta.turn + 1, Math.abs(change.fiscalChange), state.seed, `financeTier:${change.blockId}:${change.newTierId}`)
+        projects = [...projects, project]
+        policyHistory = appendPolicyHistory(policyHistory, {
+          turn: state.gameState.meta.turn,
+          sourceId: `project:${project.id}:launched`,
+          label: `${project.name} — lancé`,
+        })
+      }
+    }
   }
   if (!isBudgetBill && status === 'ADOPTED') {
     const nextYearStartTurn = state.gameState.meta.turn + 1
@@ -786,9 +947,29 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
         policyEffect,
       }),
     ]
+
+    // M6.5 §26: a specific bill's ADOPTION can launch a national project — no new fiscal channel
+    // (the bill's own fiscalCost is already booked above via the fiscal ledger entry).
+    const template = projectTemplateForBill(definition.id, projects)
+    if (template) {
+      const project = launchProject(template.id, nextYearStartTurn, Math.abs(effectiveBill.fiscalCost), state.seed, definition.id)
+      projects = [...projects, project]
+      policyHistory = appendPolicyHistory(policyHistory, {
+        turn: state.gameState.meta.turn,
+        sourceId: `project:${project.id}:launched`,
+        label: `${project.name} — lancé`,
+      })
+    }
   }
 
-  const capitalDelta = status === 'ADOPTED' ? Math.round(2 + effectiveBill.definition.reformIntensity * 3) : -Math.round(4 + effectiveBill.definition.controversy * 6)
+  // M6.5 §19: a rejected BUDGET carries an extra cost beyond an ordinary bill's rejection — the
+  // mandatory, highest-stakes vote of the year failing is more serious than a discretionary reform failing.
+  const isBudgetRejection = isBudgetBill && status === 'REJECTED'
+  const capitalDelta =
+    status === 'ADOPTED'
+      ? Math.round(2 + effectiveBill.definition.reformIntensity * 3)
+      : -Math.round(4 + effectiveBill.definition.controversy * 6) - (isBudgetRejection ? BUDGET_REJECTION_EXTRA_CAPITAL_PENALTY : 0)
+  const pendingShocks = isBudgetRejection ? [...state.pendingShocks, budgetRejectionShock(state.gameState.meta.turn)] : state.pendingShocks
 
   const historyEntry: BillHistoryEntry = {
     turn: state.gameState.meta.turn,
@@ -804,7 +985,7 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     popularityDelta,
   }
 
-  return {
+  const nextState: GamePrototypeState = {
     ...state,
     gameState,
     politicalCapital: clampPoliticalCapital(applyCapitalDelta(state.politicalCapital ?? 0, capitalDelta)),
@@ -815,28 +996,37 @@ function resolveBillVote(state: GamePrototypeState): GamePrototypeState {
     scheduledImplementations,
     fiscalLedger,
     policyHistory,
+    pendingShocks,
+    projects,
     lastVoteResult: voteResult,
     billHistory: [...state.billHistory, historyEntry],
     activeBill: null,
     screen: 'billVote',
   }
+  return applyGovernmentCrisisIfTriggered(state, nextState)
 }
 
 function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeState {
   if (!state.activeBill || !state.parliamentComposition || !state.choices.governmentProfileId) return state
   const capital = state.politicalCapital ?? 0
-  if (!canUseExceptionalProcedure(capital)) return state
+  if (!canUseExceptionalProcedure(capital, state.exceptionalProcedureUsageCount)) return state
   const modifiers = getGovernmentProfile(state.choices.governmentProfileId).modifiers
   const definition = resolveBillDefinition(state, state.activeBill.billId)
   const effectiveBill = applyConcessionsToBill(definition, state.activeBill.appliedConcessionIds)
 
-  const support = estimateBillSupport(effectiveBill, state.parliamentComposition, state.blocRelations, state.gameState.political.popularity, modifiers, {
-    courtedBlocIds: state.activeBill.courtedBlocIds,
-    capitalSpent: state.activeBill.capitalSpent,
-  })
+  const support = estimateBillSupport(
+    effectiveBill,
+    state.parliamentComposition,
+    state.blocRelations,
+    state.gameState.political.popularity,
+    modifiers,
+    { courtedBlocIds: state.activeBill.courtedBlocIds, capitalSpent: state.activeBill.capitalSpent },
+    state.politicalDeals,
+  )
   const hostileBlocIds = blocsHostileToProcedure(support.blocBreakdown)
 
-  const procedureResult = applyExceptionalProcedure(capital, state.governmentTension)
+  // M6.5 §21: cost/popularity/tension all escalate with prior uses this mandate — see exceptionalProcedure.ts.
+  const procedureResult = applyExceptionalProcedure(capital, state.governmentTension, state.exceptionalProcedureUsageCount)
   let blocRelations = state.blocRelations
   for (const blocId of hostileBlocIds) {
     blocRelations = adjustRelation(blocRelations, blocId, RELATIONSHIP_EFFECTS.PROCEDURAL_FORCING)
@@ -849,6 +1039,7 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
   let scheduledImplementations = state.scheduledImplementations
   let fiscalLedger = state.fiscalLedger
   let policyHistory = state.policyHistory
+  let projects = state.projects
 
   if (isBudgetBill) {
     const applied = applyAdoptedBudget(state, effectiveBill, definition)
@@ -856,6 +1047,27 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
     scheduledImplementations = applied.scheduledImplementations
     fiscalLedger = applied.fiscalLedger
     policyHistory = applied.policyHistory
+
+    // M6.5 §26: forcing a budget tier through via exceptional procedure can still launch its
+    // matching national project — the tier's fiscal effect is already booked above.
+    const budgetChanges = computeFinanceChanges(
+      state.draftFinanceSelections.spending,
+      state.financeLevels.spending,
+      state.draftFinanceSelections.revenue,
+      state.financeLevels.revenue,
+    )
+    for (const change of budgetChanges) {
+      const template = projectTemplateForFinanceTier(change.blockId, change.newTierId, projects)
+      if (template) {
+        const project = launchProject(template.id, state.gameState.meta.turn + 1, Math.abs(change.fiscalChange), state.seed, `financeTier:${change.blockId}:${change.newTierId}`)
+        projects = [...projects, project]
+        policyHistory = appendPolicyHistory(policyHistory, {
+          turn: state.gameState.meta.turn,
+          sourceId: `project:${project.id}:launched`,
+          label: `${project.name} — lancé`,
+        })
+      }
+    }
   } else {
     const nextYearStartTurn = state.gameState.meta.turn + 1
     const scheduledTurn = nextYearStartTurn + definition.implementationDelay
@@ -879,6 +1091,17 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
         policyEffect,
       }),
     ]
+
+    const template = projectTemplateForBill(definition.id, projects)
+    if (template) {
+      const project = launchProject(template.id, nextYearStartTurn, Math.abs(effectiveBill.fiscalCost), state.seed, definition.id)
+      projects = [...projects, project]
+      policyHistory = appendPolicyHistory(policyHistory, {
+        turn: state.gameState.meta.turn,
+        sourceId: `project:${project.id}:launched`,
+        label: `${project.name} — lancé`,
+      })
+    }
   }
 
   const historyEntry: BillHistoryEntry = {
@@ -895,21 +1118,24 @@ function resolveExceptionalProcedure(state: GamePrototypeState): GamePrototypeSt
     popularityDelta: procedureResult.popularityDelta,
   }
 
-  return {
+  const nextState: GamePrototypeState = {
     ...state,
     gameState,
     politicalCapital: procedureResult.politicalCapitalAfter,
     governmentTension: procedureResult.governmentTensionAfter,
+    exceptionalProcedureUsageCount: state.exceptionalProcedureUsageCount + 1,
     blocRelations,
     financeLevels,
     scheduledImplementations,
     fiscalLedger,
     policyHistory,
+    projects,
     lastVoteResult: null,
     billHistory: [...state.billHistory, historyEntry],
     activeBill: null,
     screen: 'billVote',
   }
+  return applyGovernmentCrisisIfTriggered(state, nextState)
 }
 
 /** The current per-block funding signal service indices drift toward (M6 §45) — read from the PERSISTED enacted tier, not the in-progress draft. */
@@ -973,6 +1199,9 @@ function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
     governmentTension: state.governmentTension,
     politicalCapital: state.politicalCapital ?? 0,
     events: EVENT_CATALOG,
+    eventMemories: state.eventMemories,
+    pendingShocks: state.pendingShocks,
+    sovereignFundExists: state.sovereignFund.exists,
   })
 
   const serviceIndices = driftServiceIndices(state.serviceIndices, serviceIndexInputsFromFinanceLevels(state.financeLevels))
@@ -1008,6 +1237,22 @@ function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
     amount: entry.policyEffect.taxChanges ?? entry.policyEffect.transfersChanges,
   }))
 
+  // M6.5 §28: every project under construction advances this turn — a dedicated policyHistory
+  // entry marks each COMPLETION with causal "entre en service" language (§49).
+  const { projects, justCompleted } = advanceProjects(state.projects, result.nextState.meta.turn)
+  const completionHistory: PolicyHistoryEntry[] = justCompleted.map((project) => ({
+    turn: result.nextState.meta.turn,
+    sourceId: `project:${project.id}:completed`,
+    label: `${project.name} — le projet entre en service`,
+  }))
+
+  // M6.5 §38: the fund's annual return applies once per gameplay year (year-end turns only) —
+  // never per-turn noise.
+  const sovereignFund =
+    state.sovereignFund.exists && isYearEndTurn(result.nextState.meta.turn)
+      ? applyAnnualReturn(state.sovereignFund, state.seed, turnToGameplayYear(result.nextState.meta.turn)).fund
+      : state.sovereignFund
+
   const nextStateBase: GamePrototypeState = {
     ...state,
     gameState: gameStateWithPopularity,
@@ -1018,8 +1263,12 @@ function advanceTurnAction(state: GamePrototypeState): GamePrototypeState {
     serviceIndices,
     promiseResolutions: newResolutions,
     economicSnapshots,
-    policyHistory: implementationHistory.reduce(appendPolicyHistory, state.policyHistory),
+    policyHistory: [...implementationHistory, ...completionHistory].reduce(appendPolicyHistory, state.policyHistory),
     firedEventIds: result.firedEvent ? [...state.firedEventIds, result.firedEvent.id] : state.firedEventIds,
+    // M6.5 §47: pending political/economic shocks apply on exactly this one turn (see `beginMandateTurn`'s `shocks[]`) — always cleared after, never re-applied.
+    pendingShocks: [],
+    projects,
+    sovereignFund,
   }
 
   if (result.firedEvent) {
@@ -1097,7 +1346,46 @@ function resolveEventChoice(state: GamePrototypeState, choiceId: string): GamePr
     ]
   }
 
-  return {
+  // M6.5 §2: every event choice is remembered, tagged for later arc/topic/cooldown queries — never just the last one.
+  const memoryTags = ['event:' + event.id, ...(event.topic ? [`topic:${event.topic}`] : []), ...(event.arcId ? [`arc:${event.arcId}`] : []), event.category]
+  const eventMemories = recordEventMemory(state.eventMemories, {
+    arcId: event.arcId,
+    eventId: event.id,
+    turn,
+    choiceId: choice.id,
+    tags: memoryTags,
+  })
+
+  let policyHistory = state.policyHistory
+  let projects = state.projects
+  let sovereignFund = state.sovereignFund
+
+  // M6.5 §26: an event choice can launch a national project — no new fiscal channel (the choice's
+  // own fiscalEffect, if any, is already booked above via the ledger entry).
+  const projectTemplate = projectTemplateForEventChoice(event.id, choice.id, projects)
+  if (projectTemplate) {
+    const project = launchProject(projectTemplate.id, turn + 1, Math.abs(choice.fiscalEffect ?? 0), state.seed, `event:${event.id}:${choice.id}`)
+    projects = [...projects, project]
+    policyHistory = appendPolicyHistory(policyHistory, {
+      turn,
+      sourceId: `project:${project.id}:launched`,
+      label: `${project.name} — lancé`,
+    })
+  }
+
+  // M6.5 §40/45: a small, hardcoded set of fund-portfolio choices reallocate the fund's OWN
+  // portfolio value into a new holding — never the fiscal ledger (see fundEngine.ts's `acquireStake` doc comment).
+  if (sovereignFund.exists) {
+    if (event.id === 'tech-foreign-acquisition-attempt-with-fund' && choice.id === 'fund-acquires-stake') {
+      sovereignFund = acquireStake(sovereignFund, 'Participations stratégiques', Math.min(0.25, 4 / Math.max(sovereignFund.portfolioValue, 1)))
+    } else if (event.id === 'fund-industrial-opportunity' && choice.id === 'invest') {
+      sovereignFund = acquireStake(sovereignFund, 'Participations industrielles', 0.05)
+    } else if (event.id === 'fund-european-coinvestment' && choice.id === 'co-invest') {
+      sovereignFund = acquireStake(sovereignFund, 'Co-investissements européens', 0.05)
+    }
+  }
+
+  const nextState: GamePrototypeState = {
     ...state,
     gameState,
     worldState,
@@ -1107,9 +1395,13 @@ function resolveEventChoice(state: GamePrototypeState, choiceId: string): GamePr
     implementedReformPolicies: policyComponents.implementedReformPolicies,
     scheduledImplementations: [...scheduledImplementations],
     fiscalLedger,
-    policyHistory: appendPolicyHistory(state.policyHistory, entry),
+    policyHistory: appendPolicyHistory(policyHistory, entry),
+    eventMemories,
+    projects,
+    sovereignFund,
     lastEventChoice: { eventId: event.id, eventTitle: event.title, choiceId: choice.id, immediateFeedback: choice.immediateFeedback },
   }
+  return applyGovernmentCrisisIfTriggered(state, nextState)
 }
 
 /** What screen comes after a turn's economic step (and any event choice) has fully resolved (M5 §5-6, §48-51). */

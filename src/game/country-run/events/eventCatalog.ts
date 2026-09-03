@@ -1,4 +1,10 @@
-import type { EventDefinition } from './eventTypes.ts'
+import { arcHasChoice, latestMemoryForArc } from '../../../engine/events/memory.ts'
+import type { EventDefinition, EventEligibilityContext } from './eventTypes.ts'
+
+/** Shorthand — every `conditions`/`probabilityModifier` closure below reads memories through this, since the context field is optional. */
+function memoriesOf(ctx: EventEligibilityContext) {
+  return ctx.eventMemories ?? []
+}
 
 /**
  * ⚠️ PROTOTYPE CONTENT (M5 §8, §11-22). 13 definitions covering 12
@@ -18,6 +24,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 1,
     latestTurn: 12,
     baseProbability: 0.3,
+    arcId: 'energy',
+    arcStage: 1,
+    topic: 'energy',
     worldShock: {
       id: 'energy-shock-mandate',
       world: { oilPriceIndex: 28 },
@@ -60,6 +69,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 3,
     latestTurn: 24,
     baseProbability: 0.12,
+    arcId: 'health',
+    arcStage: 1,
+    topic: 'health',
     probabilityModifier: (ctx) => {
       const healthCut = ctx.policyHistory.some((e) => e.category === 'health' && (e.amount ?? 0) < 0)
       return healthCut ? 2.2 : 1
@@ -103,15 +115,19 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 4,
     latestTurn: 26,
     baseProbability: 0.1,
+    arcId: 'industrial',
+    arcStage: 1,
+    topic: 'industrial',
+    probabilityModifier: (ctx) => (ctx.gameState.economic.unemployment > 8.5 ? 1.4 : 1),
     choices: [
       {
         id: 'support-package',
         title: 'PLAN DE SOUTIEN PUBLIC',
-        description: 'Un soutien financier direct au site et à ses salariés.',
+        description: 'Un soutien financier direct au site et à ses salariés — négocier des conditions de reprise en échange de l’aide.',
         fiscalEffect: 5,
         economicPolicyEffect: { currentSpendingChanges: 5 },
         popularityEffect: 1.5,
-        immediateFeedback: '+5 Md€/an de soutien direct.',
+        immediateFeedback: '+5 Md€/an de soutien direct, sous conditions.',
       },
       {
         id: 'regional-investment',
@@ -139,6 +155,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 5,
     latestTurn: 22,
     baseProbability: 0.1,
+    arcId: 'europe',
+    arcStage: 1,
+    topic: 'europe',
     worldShock: { id: 'european-slowdown-shock', world: { eurozoneGrowth: -1.2, globalTradeGrowth: -0.8 } },
     choices: [
       {
@@ -167,6 +186,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 6,
     latestTurn: 28,
     baseProbability: 0.08,
+    arcId: 'climate',
+    arcStage: 1,
+    topic: 'climate',
     worldShock: { id: 'drought-shock', directGrowthEffect: -0.15, confidence: { consumerConfidence: -3 } },
     choices: [
       {
@@ -204,6 +226,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 4,
     latestTurn: 24,
     baseProbability: 0.08,
+    arcId: 'housing',
+    arcStage: 1,
+    topic: 'housing',
     probabilityModifier: (ctx) => {
       const promisedHousing = ctx.selectedPromiseIds.includes('build-housing')
       const investedInHousing = ctx.policyHistory.some((e) => (e.category === 'housing' || e.category === 'investment') && (e.amount ?? 0) > 0)
@@ -246,6 +271,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 6,
     latestTurn: 28,
     baseProbability: 0.1,
+    arcId: 'debt-markets',
+    arcStage: 1,
+    topic: 'fiscal',
     conditions: (ctx) => ctx.gameState.economic.debtRatio > 122 || ctx.gameState.economic.deficitRatio > 5.5 || ctx.gameState.economic.marketConfidence < 42,
     choices: [
       {
@@ -284,6 +312,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 5,
     latestTurn: 27,
     baseProbability: 0.09,
+    arcId: 'social',
+    arcStage: 1,
+    topic: 'social',
     probabilityModifier: (ctx) => {
       const heavyCuts = ctx.policyHistory.filter((e) => (e.amount ?? 0) < -8).length
       const highUnemployment = ctx.gameState.economic.unemployment > 8.5
@@ -327,6 +358,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 8,
     latestTurn: 26,
     baseProbability: 0.09,
+    arcId: 'technology',
+    arcStage: 1,
+    topic: 'technology',
     choices: [
       {
         id: 'large-co-investment',
@@ -363,6 +397,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 6,
     latestTurn: 26,
     baseProbability: 0.08,
+    arcId: 'defense',
+    arcStage: 1,
+    topic: 'defense',
     choices: [
       {
         id: 'increase-defense',
@@ -400,6 +437,7 @@ export const EVENT_CATALOG: EventDefinition[] = [
     latestTurn: 28,
     baseProbability: 0.08,
     exclusiveGroup: 'tax-revenue-surprise',
+    topic: 'fiscal-surprise',
     conditions: (ctx) => ctx.gameState.economic.growth > ctx.gameState.economic.potentialGrowth,
     choices: [
       {
@@ -439,6 +477,7 @@ export const EVENT_CATALOG: EventDefinition[] = [
     latestTurn: 28,
     baseProbability: 0.08,
     exclusiveGroup: 'tax-revenue-surprise',
+    topic: 'fiscal-surprise',
     conditions: (ctx) => ctx.gameState.economic.growth <= ctx.gameState.economic.potentialGrowth,
     choices: [
       {
@@ -478,6 +517,9 @@ export const EVENT_CATALOG: EventDefinition[] = [
     earliestTurn: 8,
     latestTurn: 29,
     baseProbability: 0.1,
+    arcId: 'political',
+    arcStage: 1,
+    topic: 'political',
     conditions: (ctx) => ctx.governmentTension > 55 || ctx.politicalCapital < 20,
     probabilityModifier: (ctx) => (ctx.governmentTension > 75 ? 2 : 1),
     choices: [
@@ -506,6 +548,846 @@ export const EVENT_CATALOG: EventDefinition[] = [
         popularityEffect: -1,
         immediateFeedback: 'Aucun geste — la fracture persiste.',
         riskDescription: 'Aucune amélioration ne le résoudra sans le geste.',
+      },
+    ],
+  },
+
+  // ---------------------------------------------------------------------
+  // M6.5 §3-9: multi-stage follow-up episodes — each reads `eventMemories`
+  // to ask "what did the player choose in the opening episode", and
+  // several apply MITIGATION (§7) by checking prior investment via
+  // `policyHistory` before setting their own fiscal/popularity magnitude.
+  // ---------------------------------------------------------------------
+
+  {
+    id: 'industrial-recovery-or-more-aid',
+    title: 'L’USINE SOUTENUE DEMANDE UN NOUVEL EFFORT',
+    category: 'INDUSTRY',
+    description: 'Le site industriel soutenu l’an dernier s’est stabilisé, mais sa direction réclame un nouvel effort pour garantir sa pérennité.',
+    earliestTurn: 7,
+    latestTurn: 29,
+    baseProbability: 0.35,
+    arcId: 'industrial',
+    arcStage: 2,
+    followUpToEventId: 'plant-closure',
+    topic: 'industrial',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'industrial', 'support-package'),
+    choices: [
+      {
+        id: 'accept-new-demand',
+        title: 'ACCORDER LE NOUVEL EFFORT',
+        description: 'Prolonger le soutien — l’emploi est pleinement sauvegardé.',
+        fiscalEffect: 4,
+        economicPolicyEffect: { currentSpendingChanges: 4 },
+        popularityEffect: 1,
+        immediateFeedback: '+4 Md€/an supplémentaires — les emplois du site sont durablement sauvegardés.',
+      },
+      {
+        id: 'refuse-further-aid',
+        title: 'REFUSER TOUT NOUVEL EFFORT',
+        description: 'Considérer que l’aide initiale suffisait.',
+        popularityEffect: -1,
+        immediateFeedback: 'Aucune aide supplémentaire — l’avenir du site reste incertain.',
+        riskDescription: 'Une fermeture différée reste possible si le site ne se redresse pas seul.',
+      },
+    ],
+  },
+  {
+    id: 'industrial-closure-unrest',
+    title: 'LA FERMETURE DU SITE PROVOQUE DES TENSIONS',
+    category: 'INDUSTRY',
+    description: 'Faute de soutien, le site a fermé. La colère des salariés licenciés gagne la région.',
+    earliestTurn: 6,
+    latestTurn: 28,
+    baseProbability: 0.4,
+    arcId: 'industrial',
+    arcStage: 2,
+    followUpToEventId: 'plant-closure',
+    topic: 'industrial',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'industrial', 'no-intervention'),
+    choices: [
+      {
+        id: 'reconversion-fund',
+        title: 'FONDS DE RECONVERSION LOCAL',
+        description: 'Un fonds de reconversion pour les salariés touchés.',
+        fiscalEffect: 3,
+        economicPolicyEffect: { transfersChanges: 3 },
+        popularityEffect: 1,
+        immediateFeedback: '+3 Md€/an pour la reconversion des salariés licenciés.',
+      },
+      {
+        id: 'let-it-pass',
+        title: 'LAISSER LA SITUATION SE STABILISER',
+        description: 'Aucune intervention supplémentaire.',
+        popularityEffect: -2,
+        governmentTensionEffect: 3,
+        immediateFeedback: 'Aucune réponse — la colère locale persiste.',
+      },
+    ],
+  },
+  {
+    id: 'industrial-reconversion-result',
+    title: 'LE PLAN DE RECONVERSION RÉGIONALE PORTE SES FRUITS',
+    category: 'INDUSTRY',
+    description: 'Le plan de reconversion régionale lancé après l’annonce de fermeture commence à produire des résultats concrets.',
+    earliestTurn: 8,
+    latestTurn: 29,
+    baseProbability: 0.4,
+    arcId: 'industrial',
+    arcStage: 2,
+    followUpToEventId: 'plant-closure',
+    topic: 'industrial',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'industrial', 'regional-investment'),
+    choices: [
+      {
+        id: 'acknowledge',
+        title: 'PRENDRE ACTE',
+        description: 'De nouvelles activités économiques s’installent progressivement sur le bassin d’emploi.',
+        popularityEffect: 1,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION : le bassin d’emploi se redresse progressivement.',
+      },
+    ],
+  },
+
+  {
+    id: 'hospital-stabilization',
+    title: 'LA SITUATION HOSPITALIÈRE SE STABILISE',
+    category: 'PUBLIC_SERVICES',
+    description: 'Le financement d’urgence accordé aux hôpitaux a permis d’apaiser la situation.',
+    earliestTurn: 6,
+    latestTurn: 27,
+    baseProbability: 0.3,
+    arcId: 'health',
+    arcStage: 2,
+    followUpToEventId: 'hospital-strike',
+    topic: 'health',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'health', 'emergency-package'),
+    choices: [
+      {
+        id: 'acknowledge',
+        title: 'PRENDRE ACTE',
+        description: 'Le personnel hospitalier salue l’effort consenti.',
+        popularityEffect: 1,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION : la situation hospitalière reste stabilisée.',
+      },
+    ],
+  },
+  {
+    id: 'hospital-crisis-escalation',
+    title: 'LA CRISE HOSPITALIÈRE S’AGGRAVE',
+    category: 'PUBLIC_SERVICES',
+    description: 'Faute de réponse suffisante l’an dernier, la crise hospitalière s’aggrave — plusieurs services d’urgence ferment temporairement.',
+    earliestTurn: 6,
+    latestTurn: 28,
+    baseProbability: 0.32,
+    arcId: 'health',
+    arcStage: 2,
+    followUpToEventId: 'hospital-strike',
+    topic: 'health',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'health', 'hold-firm') && ctx.gameState.economic.publicSectorEfficiency < 60,
+    choices: [
+      {
+        id: 'late-emergency-plan',
+        title: 'PLAN D’URGENCE TARDIF',
+        description: 'Un financement d’urgence, plus coûteux qu’un an plus tôt.',
+        fiscalEffect: 9,
+        economicPolicyEffect: { currentSpendingChanges: 9 },
+        popularityEffect: -1,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION DE L’AN DERNIER : +9 Md€/an — un effort tardif, plus coûteux qu’une réponse immédiate.',
+      },
+      {
+        id: 'continue-holding',
+        title: 'CONTINUER À TENIR BON',
+        description: 'Ne toujours rien céder.',
+        popularityEffect: -5,
+        governmentTensionEffect: 6,
+        immediateFeedback: 'Aucune concession — la crise hospitalière s’installe durablement.',
+        riskDescription: 'Risque d’un mouvement social plus large.',
+      },
+    ],
+  },
+
+  {
+    id: 'housing-construction-progress',
+    title: 'LA CONSTRUCTION DE LOGEMENTS REPREND',
+    category: 'HOUSING',
+    description: 'Le plan d’investissement logement lancé l’an dernier commence à porter ses fruits — les mises en chantier reprennent.',
+    earliestTurn: 7,
+    latestTurn: 28,
+    baseProbability: 0.32,
+    arcId: 'housing',
+    arcStage: 2,
+    followUpToEventId: 'housing-crisis',
+    topic: 'housing',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'housing', 'investment-plan'),
+    choices: [
+      {
+        id: 'acknowledge',
+        title: 'PRENDRE ACTE',
+        description: 'Les mises en chantier progressent dans plusieurs régions.',
+        popularityEffect: 1,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION : la construction repart progressivement.',
+      },
+    ],
+  },
+  {
+    id: 'housing-crisis-deepens',
+    title: 'LA CRISE DU LOGEMENT CONTINUE DE S’AGGRAVER',
+    category: 'HOUSING',
+    description: 'Sans investissement structurel, la crise du logement continue de peser sur les ménages.',
+    earliestTurn: 8,
+    latestTurn: 29,
+    baseProbability: 0.28,
+    arcId: 'housing',
+    arcStage: 2,
+    followUpToEventId: 'housing-crisis',
+    topic: 'housing',
+    conditions: (ctx) => !arcHasChoice(memoriesOf(ctx), 'housing', 'investment-plan') && latestMemoryForArc(memoriesOf(ctx), 'housing') !== null,
+    choices: [
+      {
+        id: 'late-investment-plan',
+        title: 'PLAN D’INVESTISSEMENT TARDIF',
+        description: 'Un plan de construction, engagé plus tard qu’il n’aurait fallu.',
+        fiscalEffect: 7,
+        economicPolicyEffect: { publicInvestmentChanges: 7 },
+        popularityEffect: 0,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION DE L’AN DERNIER : +7 Md€/an, engagés plus tard qu’un investissement immédiat.',
+      },
+      {
+        id: 'continue-as-is',
+        title: 'NE RIEN CHANGER',
+        description: 'Laisser la situation se prolonger.',
+        popularityEffect: -2,
+        immediateFeedback: 'La crise du logement continue de peser sur le pouvoir d’achat.',
+      },
+    ],
+  },
+
+  {
+    id: 'energy-independence-progress',
+    title: 'LA RÉSILIENCE ÉNERGÉTIQUE DU PAYS S’AMÉLIORE',
+    category: 'ENERGY',
+    description: 'Les investissements engagés dans l’adaptation énergétique commencent à réduire la dépendance du pays aux prix mondiaux.',
+    earliestTurn: 8,
+    latestTurn: 29,
+    baseProbability: 0.3,
+    arcId: 'energy',
+    arcStage: 2,
+    followUpToEventId: 'energy-shock',
+    topic: 'energy',
+    conditions: (ctx) => ctx.policyHistory.some((e) => e.sourceId.includes('accelerate-adaptation') || e.category === 'investment'),
+    choices: [
+      {
+        id: 'acknowledge',
+        title: 'PRENDRE ACTE',
+        description: 'La résilience énergétique du pays progresse.',
+        popularityEffect: 0.5,
+        immediateFeedback: 'CONSÉQUENCE DE VOS DÉCISIONS D’INVESTISSEMENT : la dépendance aux prix mondiaux de l’énergie diminue progressivement.',
+      },
+    ],
+  },
+  {
+    id: 'energy-supply-problem',
+    title: 'UN PROBLÈME D’APPROVISIONNEMENT ÉNERGÉTIQUE',
+    category: 'ENERGY',
+    description: 'Un incident sur le réseau révèle la fragilité de l’approvisionnement énergétique du pays.',
+    earliestTurn: 10,
+    latestTurn: 29,
+    baseProbability: 0.07,
+    topic: 'energy',
+    choices: [
+      {
+        id: 'grid-investment',
+        title: 'INVESTISSEMENT DANS LE RÉSEAU',
+        description: 'Moderniser le réseau électrique pour éviter que l’incident ne se reproduise.',
+        fiscalEffect: 5,
+        economicPolicyEffect: { infrastructureInvestment: 5 },
+        popularityEffect: 0.5,
+        immediateFeedback: '+5 Md€/an pour moderniser le réseau électrique.',
+      },
+      {
+        id: 'minimal-response',
+        title: 'RÉPONSE MINIMALE',
+        description: 'Traiter l’incident sans investissement structurel.',
+        popularityEffect: -1.5,
+        immediateFeedback: 'Aucun investissement structurel — la fragilité du réseau demeure.',
+      },
+    ],
+  },
+
+  {
+    // M6.5 §7 MITIGATION, severe variant: fires when the player did NOT accelerate climate adaptation
+    // during the earlier drought episode (or never faced one) — full cost, full popularity hit.
+    id: 'climate-flood-event-severe',
+    title: 'DES INONDATIONS MAJEURES FRAPPENT PLUSIEURS RÉGIONS',
+    category: 'CLIMATE',
+    description: 'Des inondations exceptionnelles touchent plusieurs régions, endommageant infrastructures et exploitations agricoles.',
+    earliestTurn: 10,
+    latestTurn: 29,
+    baseProbability: 0.09,
+    exclusiveGroup: 'climate-flood',
+    arcId: 'climate',
+    arcStage: 2,
+    followUpToEventId: 'drought-shock',
+    topic: 'climate',
+    conditions: (ctx) => !arcHasChoice(memoriesOf(ctx), 'climate', 'accelerate-adaptation'),
+    choices: [
+      {
+        id: 'emergency-response',
+        title: 'RÉPONSE D’URGENCE',
+        description: 'Une aide d’urgence aux sinistrés et aux exploitations touchées.',
+        fiscalEffect: 8,
+        economicPolicyEffect: { transfersChanges: 8 },
+        popularityEffect: -1,
+        immediateFeedback: '+8 Md€/an — les dégâts sont importants, faute d’adaptation préalable.',
+        riskDescription: 'Des dégâts qu’un programme d’adaptation climatique aurait pu limiter.',
+      },
+      {
+        id: 'limited-response',
+        title: 'RÉPONSE LIMITÉE',
+        description: 'Une réponse minimale.',
+        popularityEffect: -3.5,
+        immediateFeedback: 'Réponse minimale — la colère des régions touchées grandit.',
+      },
+    ],
+  },
+  {
+    // M6.5 §7 MITIGATION, mitigated variant: the player's earlier "ACCÉLÉRER L'ADAPTATION" choice
+    // materially reduces the damage — a documented, reduced fiscal/popularity magnitude, never the
+    // full-severity numbers above. This is the concrete mechanism the brief describes: "instead of
+    // cost €8bn / popularity -4, the game reports... the actual cost is reduced."
+    id: 'climate-flood-event-mitigated',
+    title: 'DES INONDATIONS TOUCHENT PLUSIEURS RÉGIONS',
+    category: 'CLIMATE',
+    description: 'Des inondations touchent plusieurs régions — le programme d’adaptation climatique engagé après la sécheresse a limité l’ampleur des dégâts.',
+    earliestTurn: 10,
+    latestTurn: 29,
+    baseProbability: 0.09,
+    exclusiveGroup: 'climate-flood',
+    arcId: 'climate',
+    arcStage: 2,
+    followUpToEventId: 'drought-shock',
+    topic: 'climate',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'climate', 'accelerate-adaptation'),
+    choices: [
+      {
+        id: 'emergency-response',
+        title: 'RÉPONSE D’URGENCE',
+        description: 'Une aide d’urgence, limitée grâce au programme d’adaptation déjà en place.',
+        fiscalEffect: 3,
+        economicPolicyEffect: { transfersChanges: 3 },
+        popularityEffect: 0,
+        immediateFeedback:
+          'CONSÉQUENCE DE VOTRE DÉCISION D’ADAPTATION CLIMATIQUE : +3 Md€/an seulement — votre programme d’adaptation a limité les dégâts agricoles et infrastructurels.',
+      },
+      {
+        id: 'limited-response',
+        title: 'RÉPONSE LIMITÉE',
+        description: 'Une réponse minimale — les dégâts restent contenus grâce à l’adaptation déjà en place.',
+        popularityEffect: -1,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION D’ADAPTATION CLIMATIQUE : les dégâts restent contenus malgré une réponse minimale.',
+      },
+    ],
+  },
+
+  {
+    id: 'tech-foreign-acquisition-attempt',
+    title: 'UN ACTEUR ÉTRANGER CIBLE LA POUSSE TECHNOLOGIQUE FRANÇAISE',
+    category: 'INDUSTRY',
+    description: 'Le co-investissement dans l’IA et l’industrie a porté ses fruits — un acteur étranger propose désormais de racheter l’entreprise stratégique qui en est issue.',
+    earliestTurn: 10,
+    latestTurn: 29,
+    baseProbability: 0.3,
+    exclusiveGroup: 'tech-foreign-acquisition',
+    arcId: 'technology',
+    arcStage: 2,
+    followUpToEventId: 'ai-industry-plan',
+    topic: 'technology',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'technology', 'large-co-investment') && !ctx.sovereignFundExists,
+    choices: [
+      {
+        id: 'allow-acquisition',
+        title: 'AUTORISER LE RACHAT',
+        description: 'Laisser la transaction se conclure sans intervention.',
+        popularityEffect: -1.5,
+        immediateFeedback: 'Le rachat est autorisé — l’entreprise stratégique passe sous contrôle étranger.',
+        riskDescription: 'Perte de contrôle sur une technologie stratégique.',
+      },
+      {
+        id: 'regulate-acquisition',
+        title: 'ENCADRER LA TRANSACTION',
+        description: 'Imposer des conditions (emploi, transfert de technologie) sans bloquer la transaction.',
+        politicalCapitalEffect: -2,
+        popularityEffect: 0.5,
+        immediateFeedback: 'La transaction est encadrée — l’emploi et la technologie sont partiellement protégés.',
+      },
+    ],
+  },
+  {
+    // M6.5 §40 worked example: identical trigger to the plain variant above, but only eligible
+    // when FONDS SOUVERAIN FRANCE exists — it then offers a THIRD choice unavailable otherwise.
+    id: 'tech-foreign-acquisition-attempt-with-fund',
+    title: 'UN ACTEUR ÉTRANGER CIBLE LA POUSSE TECHNOLOGIQUE FRANÇAISE',
+    category: 'INDUSTRY',
+    description: 'Le co-investissement dans l’IA et l’industrie a porté ses fruits — un acteur étranger propose désormais de racheter l’entreprise stratégique qui en est issue.',
+    earliestTurn: 10,
+    latestTurn: 29,
+    baseProbability: 0.3,
+    exclusiveGroup: 'tech-foreign-acquisition',
+    arcId: 'technology',
+    arcStage: 2,
+    followUpToEventId: 'ai-industry-plan',
+    topic: 'technology',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'technology', 'large-co-investment') && ctx.sovereignFundExists === true,
+    choices: [
+      {
+        id: 'allow-acquisition',
+        title: 'AUTORISER LE RACHAT',
+        description: 'Laisser la transaction se conclure sans intervention.',
+        popularityEffect: -1.5,
+        immediateFeedback: 'Le rachat est autorisé — l’entreprise stratégique passe sous contrôle étranger.',
+        riskDescription: 'Perte de contrôle sur une technologie stratégique.',
+      },
+      {
+        id: 'regulate-acquisition',
+        title: 'ENCADRER LA TRANSACTION',
+        description: 'Imposer des conditions (emploi, transfert de technologie) sans bloquer la transaction.',
+        politicalCapitalEffect: -2,
+        popularityEffect: 0.5,
+        immediateFeedback: 'La transaction est encadrée — l’emploi et la technologie sont partiellement protégés.',
+      },
+      {
+        id: 'fund-acquires-stake',
+        title: 'LE FONDS SOUVERAIN PREND UNE PARTICIPATION — €4bn',
+        description: 'FONDS SOUVERAIN FRANCE acquiert une participation stratégique pour garder l’entreprise sous influence française.',
+        popularityEffect: 2,
+        politicalCapitalEffect: -1,
+        immediateFeedback: 'FONDS SOUVERAIN FRANCE prend une participation de 4 Md€ — l’entreprise stratégique reste sous influence française.',
+        // fiscalEffect intentionally absent: the €4bn moves from the fund's own portfolio (an
+        // already-capitalized financial asset), never a new state expenditure — see fundEngine.ts's
+        // accounting-treatment doc comment; gameReducer.ts recognizes this specific event+choice id
+        // pair and applies it to `sovereignFund`, never to `fiscalLedger`.
+      },
+    ],
+  },
+  {
+    id: 'tech-labor-disruption',
+    title: 'L’ADOPTION TECHNOLOGIQUE PERTURBE LE MARCHÉ DU TRAVAIL',
+    category: 'INDUSTRY',
+    description: 'Faute d’un plan structurant, l’adoption de nouvelles technologies se fait de façon désordonnée et fragilise certains emplois.',
+    earliestTurn: 9,
+    latestTurn: 28,
+    baseProbability: 0.28,
+    arcId: 'technology',
+    arcStage: 2,
+    followUpToEventId: 'ai-industry-plan',
+    topic: 'technology',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'technology', 'decline'),
+    choices: [
+      {
+        id: 'retraining-plan',
+        title: 'PLAN DE RECONVERSION PROFESSIONNELLE',
+        description: 'Un plan de formation pour accompagner la transition.',
+        fiscalEffect: 4,
+        economicPolicyEffect: { researchInvestment: 4 },
+        popularityEffect: 0.5,
+        immediateFeedback: '+4 Md€/an pour accompagner la reconversion professionnelle.',
+      },
+      {
+        id: 'no-response',
+        title: 'AUCUNE RÉPONSE',
+        description: 'Laisser le marché s’ajuster seul.',
+        popularityEffect: -2,
+        immediateFeedback: 'Aucune réponse — la fragilisation de l’emploi se poursuit.',
+      },
+    ],
+  },
+
+  {
+    id: 'europe-recovery-or-pressure',
+    title: 'L’EUROPE APRÈS LE RALENTISSEMENT',
+    category: 'INTERNATIONAL',
+    description: 'Plusieurs mois après le ralentissement européen, la situation évolue — reprise progressive ou pression budgétaire accrue de Bruxelles.',
+    earliestTurn: 9,
+    latestTurn: 28,
+    baseProbability: 0.3,
+    arcId: 'europe',
+    arcStage: 2,
+    followUpToEventId: 'european-slowdown',
+    topic: 'europe',
+    conditions: (ctx) => latestMemoryForArc(memoriesOf(ctx), 'europe') !== null,
+    choices: [
+      {
+        id: 'acknowledge',
+        title: 'PRENDRE ACTE',
+        description: 'La conjoncture européenne évolue, largement hors du contrôle de la France.',
+        popularityEffect: 0,
+        immediateFeedback:
+          'La conjoncture européenne évolue — un facteur largement extérieur, que votre réponse domestique a partiellement amorti.',
+      },
+    ],
+  },
+
+  {
+    id: 'market-refinancing-pressure',
+    title: 'LA PRESSION DES MARCHÉS S’ACCENTUE',
+    category: 'ECONOMY',
+    description: 'Faute de signal de consolidation, les conditions de refinancement de la dette française se durcissent.',
+    earliestTurn: 10,
+    latestTurn: 29,
+    baseProbability: 0.12,
+    arcId: 'debt-markets',
+    arcStage: 2,
+    followUpToEventId: 'debt-warning',
+    topic: 'fiscal',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'debt-markets', 'maintain-strategy') && ctx.gameState.economic.marketConfidence < 40,
+    choices: [
+      {
+        id: 'late-consolidation',
+        title: 'PLAN DE CONSOLIDATION TARDIF',
+        description: 'Un effort de sérieux budgétaire, engagé sous la pression des marchés.',
+        fiscalEffect: -10,
+        economicPolicyEffect: { currentSpendingChanges: -10 },
+        popularityEffect: -3,
+        governmentTensionEffect: 4,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION DE L’AN DERNIER : -10 Md€/an, sous la pression des marchés — un effort plus coûteux politiquement qu’une réponse anticipée.',
+      },
+      {
+        id: 'maintain-again',
+        title: 'MAINTENIR LE CAP',
+        description: 'Ne toujours rien changer.',
+        popularityEffect: -1,
+        immediateFeedback: 'Aucun changement — la pression des marchés continue de s’accentuer.',
+        riskDescription: 'Risque d’une dégradation accrue de la confiance des marchés.',
+      },
+    ],
+  },
+
+  {
+    id: 'social-protest-resolution',
+    title: 'LA CONTESTATION S’APAISE',
+    category: 'SOCIAL',
+    description: 'Les concessions accordées ont permis d’apaiser le mouvement de contestation.',
+    earliestTurn: 6,
+    latestTurn: 28,
+    baseProbability: 0.3,
+    arcId: 'social',
+    arcStage: 2,
+    followUpToEventId: 'social-protest',
+    topic: 'social',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'social', 'concede') || arcHasChoice(memoriesOf(ctx), 'social', 'negotiate'),
+    choices: [
+      {
+        id: 'acknowledge',
+        title: 'PRENDRE ACTE',
+        description: 'Le climat social se détend progressivement.',
+        popularityEffect: 0.5,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION : le climat social se détend.',
+      },
+    ],
+  },
+  {
+    id: 'social-protest-escalation',
+    title: 'LA CONTESTATION S’INTENSIFIE',
+    category: 'SOCIAL',
+    description: 'Faute de réponse l’an dernier, le mouvement social gagne en ampleur et en radicalité.',
+    earliestTurn: 6,
+    latestTurn: 29,
+    baseProbability: 0.3,
+    arcId: 'social',
+    arcStage: 2,
+    followUpToEventId: 'social-protest',
+    topic: 'social',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'social', 'hold-firm'),
+    choices: [
+      {
+        id: 'late-concessions',
+        title: 'CONCESSIONS TARDIVES',
+        description: 'Céder maintenant, à un coût politique plus élevé qu’un an plus tôt.',
+        fiscalEffect: 6,
+        economicPolicyEffect: { transfersChanges: 6 },
+        politicalCapitalEffect: -4,
+        popularityEffect: 0.5,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION DE L’AN DERNIER : +6 Md€/an de concessions tardives — un coût politique plus élevé qu’une réponse immédiate.',
+      },
+      {
+        id: 'continue-holding',
+        title: 'CONTINUER À TENIR BON',
+        description: 'Ne toujours rien céder.',
+        popularityEffect: -6,
+        governmentTensionEffect: 10,
+        immediateFeedback: 'Aucune concession — la contestation continue de s’intensifier.',
+        riskDescription: 'Risque de crise sociale prolongée.',
+      },
+    ],
+  },
+
+  {
+    id: 'defense-eu-coordination',
+    title: 'UNE OPPORTUNITÉ DE COORDINATION EUROPÉENNE EN DÉFENSE',
+    category: 'SECURITY',
+    description: 'L’effort de défense engagé ouvre la voie à un programme industriel de défense coordonné au niveau européen.',
+    earliestTurn: 9,
+    latestTurn: 29,
+    baseProbability: 0.28,
+    arcId: 'defense',
+    arcStage: 2,
+    followUpToEventId: 'defense-pressure',
+    topic: 'defense',
+    conditions: (ctx) => arcHasChoice(memoriesOf(ctx), 'defense', 'increase-defense'),
+    choices: [
+      {
+        id: 'join-eu-program',
+        title: 'REJOINDRE LE PROGRAMME EUROPÉEN',
+        description: 'Un programme industriel de défense partagé, bénéfique pour l’industrie française.',
+        fiscalEffect: 3,
+        economicPolicyEffect: { researchInvestment: 3 },
+        popularityEffect: 1,
+        immediateFeedback: 'CONSÉQUENCE DE VOTRE DÉCISION : la France rejoint un programme industriel de défense européen.',
+      },
+      {
+        id: 'stay-independent',
+        title: 'RESTER INDÉPENDANT',
+        description: 'Poursuivre seul sur ce dossier.',
+        popularityEffect: 0,
+        immediateFeedback: 'La France conserve son indépendance industrielle sur ce dossier.',
+      },
+    ],
+  },
+
+  // ---------------------------------------------------------------------
+  // M6.5 §8: positive/opportunity events, standalone (no arc) — not every
+  // event is a crisis.
+  // ---------------------------------------------------------------------
+
+  {
+    id: 'tourism-export-boom',
+    title: 'UNE ANNÉE RECORD POUR LE TOURISME ET LES EXPORTATIONS',
+    category: 'ECONOMY',
+    description: 'Le tourisme et les exportations françaises connaissent une année exceptionnelle.',
+    earliestTurn: 3,
+    latestTurn: 27,
+    baseProbability: 0.07,
+    topic: 'opportunity',
+    conditions: (ctx) => ctx.gameState.economic.businessConfidence > 52,
+    choices: [
+      {
+        id: 'capitalize',
+        title: 'CAPITALISER SUR LA DYNAMIQUE',
+        description: 'Un soutien ciblé au secteur pour prolonger la dynamique.',
+        fiscalEffect: 2,
+        economicPolicyEffect: { currentSpendingChanges: 2 },
+        popularityEffect: 1.5,
+        immediateFeedback: '+2 Md€/an pour prolonger la dynamique touristique et exportatrice.',
+      },
+      {
+        id: 'let-it-flow',
+        title: 'LAISSER LA DYNAMIQUE SE POURSUIVRE',
+        description: 'Aucune intervention — la dynamique profite déjà à l’économie.',
+        popularityEffect: 1,
+        immediateFeedback: 'La dynamique touristique et exportatrice profite directement à l’économie.',
+      },
+    ],
+  },
+  {
+    id: 'technology-breakthrough',
+    title: 'UNE PERCÉE TECHNOLOGIQUE FRANÇAISE',
+    category: 'INDUSTRY',
+    description: 'Une entreprise française réalise une percée technologique remarquée à l’international.',
+    earliestTurn: 5,
+    latestTurn: 28,
+    baseProbability: 0.06,
+    topic: 'opportunity',
+    choices: [
+      {
+        id: 'support-scaleup',
+        title: 'SOUTENIR LE PASSAGE À L’ÉCHELLE',
+        description: 'Un soutien public pour transformer la percée en réussite industrielle durable.',
+        fiscalEffect: 3,
+        economicPolicyEffect: { researchInvestment: 3 },
+        popularityEffect: 1.5,
+        immediateFeedback: '+3 Md€/an pour soutenir le passage à l’échelle industrielle.',
+      },
+      {
+        id: 'celebrate-only',
+        title: 'SALUER LA RÉUSSITE',
+        description: 'Aucun soutien financier direct.',
+        popularityEffect: 0.5,
+        immediateFeedback: 'Une réussite saluée, sans soutien public direct.',
+      },
+    ],
+  },
+  {
+    id: 'eu-funding-opportunity',
+    title: 'UNE OPPORTUNITÉ DE FINANCEMENT EUROPÉEN',
+    category: 'INTERNATIONAL',
+    description: 'L’Union européenne ouvre un nouveau guichet de financement pour les infrastructures et la transition énergétique.',
+    earliestTurn: 4,
+    latestTurn: 27,
+    baseProbability: 0.07,
+    topic: 'opportunity',
+    choices: [
+      {
+        id: 'apply-for-funding',
+        title: 'DÉPOSER UN DOSSIER',
+        description: 'Solliciter le financement européen — un effet modeste mais quasi gratuit.',
+        fiscalEffect: -2,
+        economicPolicyEffect: { infrastructureInvestment: 4 },
+        popularityEffect: 1,
+        immediateFeedback: 'La France obtient un cofinancement européen : +4 Md€/an d’investissement pour seulement -2 Md€/an de contrepartie nationale.',
+      },
+      {
+        id: 'skip',
+        title: 'NE PAS SOLLICITER LE FINANCEMENT',
+        description: 'Laisser passer l’opportunité.',
+        popularityEffect: -0.3,
+        immediateFeedback: 'L’opportunité de financement européen n’est pas saisie.',
+      },
+    ],
+  },
+  {
+    id: 'productivity-surprise',
+    title: 'UNE SURPRISE DE PRODUCTIVITÉ',
+    category: 'ECONOMY',
+    description: 'Les investissements engagés depuis le début du mandat produisent un gain de productivité plus rapide que prévu.',
+    earliestTurn: 10,
+    latestTurn: 29,
+    baseProbability: 0.06,
+    topic: 'opportunity',
+    conditions: (ctx) => ctx.policyHistory.filter((e) => e.category === 'investment' && (e.amount ?? 0) > 0).length >= 2,
+    choices: [
+      {
+        id: 'reinvest-gain',
+        title: 'RÉINVESTIR LE GAIN',
+        description: 'Prolonger la dynamique par un nouvel investissement ciblé.',
+        fiscalEffect: 2,
+        economicPolicyEffect: { researchInvestment: 2 },
+        popularityEffect: 1,
+        immediateFeedback: 'CONSÉQUENCE DE VOS INVESTISSEMENTS : +2 Md€/an réinvestis pour prolonger le gain de productivité.',
+      },
+      {
+        id: 'bank-the-gain',
+        title: 'CONSTATER LE GAIN SANS NOUVELLE DÉPENSE',
+        description: 'Les investissements engagés portent leurs fruits plus vite que prévu, sans dépense supplémentaire.',
+        popularityEffect: 1,
+        immediateFeedback: 'CONSÉQUENCE DE VOS INVESTISSEMENTS : un gain de productivité plus rapide que prévu, sans coût supplémentaire.',
+      },
+    ],
+  },
+  // ---------------------------------------------------------------------
+  // M6.5 §45: fund-specific events — every one gated on `sovereignFundExists`,
+  // never all firing in one run (each has its own probability/turn window).
+  // ---------------------------------------------------------------------
+
+  {
+    id: 'fund-governance-controversy',
+    title: 'UNE CONTROVERSE SUR LA GOUVERNANCE DU FONDS SOUVERAIN',
+    category: 'ECONOMY',
+    description: 'Des critiques s’élèvent sur l’indépendance et les choix d’investissement de FONDS SOUVERAIN FRANCE.',
+    earliestTurn: 8,
+    latestTurn: 28,
+    baseProbability: 0.08,
+    topic: 'sovereign-fund',
+    conditions: (ctx) => ctx.sovereignFundExists === true,
+    choices: [
+      {
+        id: 'reinforce-independence',
+        title: 'RENFORCER L’INDÉPENDANCE DE GESTION',
+        description: 'Clarifier les règles de gouvernance pour apaiser la controverse.',
+        popularityEffect: 0.5,
+        politicalCapitalEffect: -1,
+        immediateFeedback: 'Les règles de gouvernance du fonds sont clarifiées.',
+      },
+      {
+        id: 'let-it-pass',
+        title: 'LAISSER PASSER LA CONTROVERSE',
+        description: 'Ne rien changer.',
+        popularityEffect: -1,
+        immediateFeedback: 'La controverse s’estompe sans changement de gouvernance.',
+      },
+    ],
+  },
+  {
+    id: 'fund-industrial-opportunity',
+    title: 'UNE OPPORTUNITÉ D’INVESTISSEMENT INDUSTRIEL POUR LE FONDS',
+    category: 'INDUSTRY',
+    description: 'FONDS SOUVERAIN FRANCE se voit proposer une prise de participation dans une entreprise industrielle stratégique.',
+    earliestTurn: 6,
+    latestTurn: 29,
+    baseProbability: 0.08,
+    topic: 'sovereign-fund',
+    conditions: (ctx) => ctx.sovereignFundExists === true,
+    choices: [
+      {
+        id: 'invest',
+        title: 'INVESTIR VIA LE FONDS',
+        description: 'Une prise de participation financée par le portefeuille du fonds — sans nouvelle dépense publique.',
+        popularityEffect: 1,
+        immediateFeedback: 'FONDS SOUVERAIN FRANCE investit dans l’entreprise — financé par le portefeuille du fonds, sans nouvelle dépense publique.',
+      },
+      {
+        id: 'decline',
+        title: 'DÉCLINER',
+        description: 'Ne pas saisir l’opportunité.',
+        popularityEffect: 0,
+        immediateFeedback: 'Le fonds ne participe pas à cette opportunité.',
+      },
+    ],
+  },
+  {
+    id: 'fund-european-coinvestment',
+    title: 'UNE OPPORTUNITÉ DE CO-INVESTISSEMENT EUROPÉEN POUR LE FONDS',
+    category: 'INTERNATIONAL',
+    description: 'Un fonds souverain européen partenaire propose un co-investissement stratégique à FONDS SOUVERAIN FRANCE.',
+    earliestTurn: 8,
+    latestTurn: 29,
+    baseProbability: 0.07,
+    topic: 'sovereign-fund',
+    conditions: (ctx) => ctx.sovereignFundExists === true,
+    choices: [
+      {
+        id: 'co-invest',
+        title: 'CO-INVESTIR',
+        description: 'Un co-investissement européen, diversifiant le portefeuille du fonds.',
+        popularityEffect: 0.5,
+        immediateFeedback: 'FONDS SOUVERAIN FRANCE co-investit aux côtés d’un partenaire européen.',
+      },
+      {
+        id: 'decline',
+        title: 'DÉCLINER',
+        description: 'Ne pas participer.',
+        popularityEffect: 0,
+        immediateFeedback: 'Le fonds ne participe pas à ce co-investissement.',
+      },
+    ],
+  },
+
+  {
+    id: 'major-industrial-investment-opportunity',
+    title: 'UN INVESTISSEUR PROPOSE UNE IMPLANTATION INDUSTRIELLE MAJEURE',
+    category: 'INDUSTRY',
+    description: 'Un grand groupe industriel propose d’implanter une usine majeure en France, à condition d’un accompagnement public.',
+    earliestTurn: 6,
+    latestTurn: 27,
+    baseProbability: 0.06,
+    topic: 'opportunity',
+    conditions: (ctx) => ctx.gameState.economic.marketConfidence > 45,
+    choices: [
+      {
+        id: 'accompany-investment',
+        title: 'ACCOMPAGNER L’IMPLANTATION',
+        description: 'Un accompagnement public pour sécuriser l’implantation — des milliers d’emplois à la clé.',
+        fiscalEffect: 5,
+        economicPolicyEffect: { infrastructureInvestment: 5 },
+        popularityEffect: 2,
+        immediateFeedback: '+5 Md€/an d’accompagnement — une implantation industrielle majeure sécurisée.',
+      },
+      {
+        id: 'decline-support',
+        title: 'NE PAS ACCOMPAGNER',
+        description: 'Laisser l’investisseur choisir un autre pays.',
+        popularityEffect: -0.5,
+        immediateFeedback: 'L’investisseur se tourne vers un autre pays.',
       },
     ],
   },

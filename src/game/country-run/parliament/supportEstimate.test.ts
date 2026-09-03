@@ -81,26 +81,49 @@ describe('computeBlocSupportProbability — bounded [0.03, 0.97]', () => {
         courted: false,
         capitalSpentThisNegotiation: 0,
         promiseLinked: false,
+        presidentialSeats: COMPOSITION.playerSeats,
+        brokenDealCount: 0,
       })
       expect(probability).toBeGreaterThanOrEqual(0.03)
       expect(probability).toBeLessThanOrEqual(0.97)
     }
   })
 
-  it('a bloc red line caps support near-zero regardless of other bonuses', () => {
+  it('a bloc red line caps support near-zero when the government hasn’t specifically invested to overcome it', () => {
     // NATIONAL_POPULISTS has householdTax as a red line; TAX_CUT_BILL has householdTax = -0.9 <= -0.5.
     const effective = applyConcessionsToBill(TAX_CUT_BILL, [])
     const probability = computeBlocSupportProbability({
       bill: effective,
       blocDef: getBlocDefinition('NATIONAL_POPULISTS'),
-      relationScore: 100, // even a maximal relationship shouldn't rescue a red-line bill
+      relationScore: 100, // even a maximal relationship shouldn't rescue a red-line bill on its own
+      popularity: 90,
+      governmentModifiers: NEUTRAL,
+      courted: false,
+      capitalSpentThisNegotiation: 0,
+      promiseLinked: true,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
+    })
+    expect(probability).toBeLessThanOrEqual(0.15)
+  })
+
+  it('M6.5 §13: a red line is expensive but not absolute to overcome — courting + capital raises the cap, but only to a still-low ceiling', () => {
+    // NATIONAL_POPULISTS has householdTax as a red line; TAX_CUT_BILL has householdTax = -0.9 <= -0.5.
+    const effective = applyConcessionsToBill(TAX_CUT_BILL, [])
+    const probability = computeBlocSupportProbability({
+      bill: effective,
+      blocDef: getBlocDefinition('NATIONAL_POPULISTS'),
+      relationScore: 100,
       popularity: 90,
       governmentModifiers: NEUTRAL,
       courted: true,
       capitalSpentThisNegotiation: 100,
       promiseLinked: true,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
-    expect(probability).toBeLessThanOrEqual(0.15)
+    expect(probability).toBeGreaterThan(0.15)
+    expect(probability).toBeLessThanOrEqual(0.35)
   })
 
   it('courting, capital, and a positive relationship all increase support relative to a neutral baseline', () => {
@@ -115,6 +138,8 @@ describe('computeBlocSupportProbability — bounded [0.03, 0.97]', () => {
       courted: false,
       capitalSpentThisNegotiation: 0,
       promiseLinked: false,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     const boosted = computeBlocSupportProbability({
       bill: effective,
@@ -125,6 +150,8 @@ describe('computeBlocSupportProbability — bounded [0.03, 0.97]', () => {
       courted: true,
       capitalSpentThisNegotiation: 20,
       promiseLinked: true,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     expect(boosted).toBeGreaterThan(baseline)
   })
@@ -134,9 +161,13 @@ describe('computeBlocSupportProbability — bounded [0.03, 0.97]', () => {
     const blocDef = getBlocDefinition('SOCIAL_LEFT')
     const low = computeBlocSupportProbability({
       bill: effective, blocDef, relationScore: 0, popularity: 0, governmentModifiers: NEUTRAL, courted: false, capitalSpentThisNegotiation: 0, promiseLinked: false,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     const high = computeBlocSupportProbability({
       bill: effective, blocDef, relationScore: 0, popularity: 100, governmentModifiers: NEUTRAL, courted: false, capitalSpentThisNegotiation: 0, promiseLinked: false,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     expect(Math.abs(high - low)).toBeLessThanOrEqual(0.101)
   })
@@ -194,18 +225,26 @@ describe('estimateBillSupport — government modifier integration (M4 §25)', ()
     const highAccuracyOnly: GovernmentModifiers = { ...NEUTRAL, fiscalForecastAccuracy: 1.1 }
     const withHighAccuracy = computeBlocSupportProbability({
       bill: effective, blocDef: getBlocDefinition('CONSERVATIVE_RIGHT'), relationScore: 0, popularity: 50, governmentModifiers: highAccuracyOnly, courted: false, capitalSpentThisNegotiation: 0, promiseLinked: false,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     const neutral = computeBlocSupportProbability({
       bill: effective, blocDef: getBlocDefinition('CONSERVATIVE_RIGHT'), relationScore: 0, popularity: 50, governmentModifiers: NEUTRAL, courted: false, capitalSpentThisNegotiation: 0, promiseLinked: false,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     expect(withHighAccuracy).toBeGreaterThan(neutral)
 
     // A bloc with NO fiscalDiscipline tag (ECOLOGISTS) should be unaffected by the same modifier change.
     const ecoWithAccuracy = computeBlocSupportProbability({
       bill: effective, blocDef: getBlocDefinition('ECOLOGISTS'), relationScore: 0, popularity: 50, governmentModifiers: highAccuracyOnly, courted: false, capitalSpentThisNegotiation: 0, promiseLinked: false,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     const ecoNeutral = computeBlocSupportProbability({
       bill: effective, blocDef: getBlocDefinition('ECOLOGISTS'), relationScore: 0, popularity: 50, governmentModifiers: NEUTRAL, courted: false, capitalSpentThisNegotiation: 0, promiseLinked: false,
+      presidentialSeats: COMPOSITION.playerSeats,
+      brokenDealCount: 0,
     })
     expect(ecoWithAccuracy).toBe(ecoNeutral)
   })

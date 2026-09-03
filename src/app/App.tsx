@@ -234,10 +234,15 @@ export function App() {
       const modifiers = getGovernmentProfile(state.choices.governmentProfileId).modifiers
       const definition = resolveBillDefinition(state, state.activeBill.billId)
       const effectiveBill = applyConcessionsToBill(definition, state.activeBill.appliedConcessionIds)
-      const support = estimateBillSupport(effectiveBill, state.parliamentComposition, state.blocRelations, state.gameState.political.popularity, modifiers, {
-        courtedBlocIds: state.activeBill.courtedBlocIds,
-        capitalSpent: state.activeBill.capitalSpent,
-      })
+      const support = estimateBillSupport(
+        effectiveBill,
+        state.parliamentComposition,
+        state.blocRelations,
+        state.gameState.political.popularity,
+        modifiers,
+        { courtedBlocIds: state.activeBill.courtedBlocIds, capitalSpent: state.activeBill.capitalSpent },
+        state.politicalDeals,
+      )
       return (
         <div className="cr-root">
           {nav}
@@ -294,7 +299,7 @@ export function App() {
       const composition = state.parliamentComposition
       const bills = availableReformBills(state).map((definition) => {
         const effectiveBill = applyConcessionsToBill(definition, [])
-        const support = estimateBillSupport(effectiveBill, composition, state.blocRelations, state.gameState.political.popularity, modifiers, null)
+        const support = estimateBillSupport(effectiveBill, composition, state.blocRelations, state.gameState.political.popularity, modifiers, null, state.politicalDeals)
         return { definition, support }
       })
       return (

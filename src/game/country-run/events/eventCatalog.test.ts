@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { EVENT_CATALOG, getEventDefinition } from './eventCatalog.ts'
 
-describe('EVENT_CATALOG — content shape (M5 §8, §11-22)', () => {
-  it('has 13 definitions with unique ids, covering 12 conceptual events (tax-windfall/tax-shortfall share one exclusiveGroup)', () => {
-    expect(EVENT_CATALOG).toHaveLength(13)
-    expect(new Set(EVENT_CATALOG.map((e) => e.id)).size).toBe(13)
+describe('EVENT_CATALOG — content shape (M5 §8, §11-22, expanded M6.5 §3-9)', () => {
+  it('has 40 definitions with unique ids — M6.5 §4 target of ~35-45 conceptual events, organized around ~10 arcs plus standalone events', () => {
+    expect(EVENT_CATALOG).toHaveLength(40)
+    expect(new Set(EVENT_CATALOG.map((e) => e.id)).size).toBe(40)
   })
 
   it('getEventDefinition resolves every catalog entry and throws on an unknown id', () => {
@@ -31,11 +31,19 @@ describe('EVENT_CATALOG — content shape (M5 §8, §11-22)', () => {
     }
   })
 
-  it('every event has at least 2 choices, each with a non-empty immediateFeedback', () => {
+  it('every event has at least 1 choice, each with a non-empty immediateFeedback', () => {
     for (const event of EVENT_CATALOG) {
-      expect(event.choices.length).toBeGreaterThanOrEqual(2)
+      expect(event.choices.length).toBeGreaterThanOrEqual(1)
       for (const choice of event.choices) {
         expect(choice.immediateFeedback.length).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('every OPENING episode (arcStage 1, or standalone with no arc) offers a genuine decision (>= 2 choices) — only a pure-consequence follow-up (arcStage >= 2) may be a single-choice "acknowledge" beat (M6.5 §9, §49 causal narration)', () => {
+    for (const event of EVENT_CATALOG) {
+      if (!event.arcStage || event.arcStage === 1) {
+        expect(event.choices.length, `${event.id} (opening/standalone) should offer >= 2 choices`).toBeGreaterThanOrEqual(2)
       }
     }
   })

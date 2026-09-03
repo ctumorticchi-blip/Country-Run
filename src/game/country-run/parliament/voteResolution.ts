@@ -73,9 +73,12 @@ export function resolveVote(
   popularity: number,
   governmentModifiers: GovernmentModifiers,
   negotiation: ActiveNegotiationSnapshot | null,
+  /** M6.5 §14-15 — defaults to none for callers that don't yet track deal history. */
+  politicalDeals: readonly { blocId: string; fulfilled: boolean }[] = [],
 ): VoteResult {
   const rng = createActionRng(seed, `vote:${bill.definition.id}:attempt-${String(attemptNumber)}`)
   const promiseLinked = bill.definition.promiseLinks.length > 0
+  const presidentialSeats = composition.blocs.find((b) => b.isPlayerCoalition)?.seats ?? 0
 
   const blocBreakdown: BlocVoteResult[] = composition.blocs.map((b) => {
     if (b.isPlayerCoalition) {
@@ -92,6 +95,8 @@ export function resolveVote(
       courted: negotiation?.courtedBlocIds.includes(b.id) ?? false,
       capitalSpentThisNegotiation: negotiation?.capitalSpent ?? 0,
       promiseLinked,
+      presidentialSeats,
+      brokenDealCount: politicalDeals.filter((d) => d.blocId === b.id && !d.fulfilled).length,
     })
     const jitter = rng.float(-0.05, 0.05)
     const [votesFor, votesAgainst, abstentions] = splitSeatsThreeWay(b.seats, computeVoteShares(probability, jitter))

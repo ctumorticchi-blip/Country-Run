@@ -47,6 +47,15 @@ export const PARLIAMENT_BLOC_DEFINITIONS: ParliamentBlocDefinition[] = [
     negotiationStyle: 'TRANSACTIONAL',
     reliability: 0.8,
     baseGovernmentSupport: 0.3,
+    // M6.5 §13 audit note: a hard redLine on `businessTax` was considered here (brief's "business-tax
+    // increases" example) but `hitsRedLine` (supportEstimate.ts) fires on a dimension value <= -0.5 for
+    // EVERY dimension — correct for "cuts to a good thing" dimensions (pensions/health/environment/
+    // defense), but WRONG for `businessTax`/`householdTax` (where -1 means "cuts that tax", the
+    // opposite of what a pro-business bloc would object to). Generalizing `hitsRedLine` to be
+    // per-dimension-direction-aware would risk changing the already-tested NATIONAL_POPULISTS/
+    // householdTax red line's behavior. Business-tax-increase aversion is instead carried by this
+    // bloc's own (M6.5-strengthened, see supportEstimate.ts's `base` weighting) continuous
+    // `policyAffinity.businessTax` — real and meaningful, just not a hard cap.
     redLines: [],
     preferredConcessions: ['REDUCE_SPENDING_CAP', 'CUT_BUSINESS_TAX'],
     politicalTags: ['reform', 'fiscalDiscipline'],
@@ -128,7 +137,8 @@ export const PARLIAMENT_BLOC_DEFINITIONS: ParliamentBlocDefinition[] = [
     negotiationStyle: 'TRANSACTIONAL',
     reliability: 0.75,
     baseGovernmentSupport: 0.1,
-    redLines: ['fiscalDiscipline'],
+    // M6.5 §13: fiscalDiscipline (large deficits) was already a red line — defense cuts added, this bloc's own example from the brief and directionally safe (defense follows the standard "+1 = more" convention, unlike the tax dimensions — see the REFORM_CENTER comment above).
+    redLines: ['fiscalDiscipline', 'defense'],
     preferredConcessions: ['CUT_BUSINESS_TAX', 'REDUCE_SPENDING_CAP'],
     politicalTags: ['fiscalDiscipline', 'security'],
     seatWeight: 1.0,

@@ -5,8 +5,11 @@ import {
   canUseExceptionalProcedure,
   clampGovernmentTension,
   EXCEPTIONAL_PROCEDURE_CAPITAL_COST,
+  EXCEPTIONAL_PROCEDURE_ESCALATION_PER_USE,
+  EXCEPTIONAL_PROCEDURE_MAX_ESCALATIONS,
   EXCEPTIONAL_PROCEDURE_POPULARITY_PENALTY,
   EXCEPTIONAL_PROCEDURE_TENSION_INCREASE,
+  exceptionalProcedureCost,
   MAX_GOVERNMENT_TENSION,
   MIN_GOVERNMENT_TENSION,
 } from './exceptionalProcedure.ts'
@@ -48,6 +51,32 @@ describe('clampGovernmentTension', () => {
     expect(clampGovernmentTension(-10)).toBe(MIN_GOVERNMENT_TENSION)
     expect(clampGovernmentTension(150)).toBe(MAX_GOVERNMENT_TENSION)
     expect(clampGovernmentTension(50)).toBe(50)
+  })
+})
+
+describe('M6.5 §21 — exceptional procedure escalation on repeated use', () => {
+  it('exceptionalProcedureCost rises with prior usage, capped at EXCEPTIONAL_PROCEDURE_MAX_ESCALATIONS', () => {
+    expect(exceptionalProcedureCost(0)).toBe(EXCEPTIONAL_PROCEDURE_CAPITAL_COST)
+    expect(exceptionalProcedureCost(1)).toBe(EXCEPTIONAL_PROCEDURE_CAPITAL_COST + EXCEPTIONAL_PROCEDURE_ESCALATION_PER_USE)
+    expect(exceptionalProcedureCost(EXCEPTIONAL_PROCEDURE_MAX_ESCALATIONS)).toBe(
+      EXCEPTIONAL_PROCEDURE_CAPITAL_COST + EXCEPTIONAL_PROCEDURE_MAX_ESCALATIONS * EXCEPTIONAL_PROCEDURE_ESCALATION_PER_USE,
+    )
+    // Never rises further past the cap — a large-but-bounded cost, never an eventual mathematical impossibility.
+    expect(exceptionalProcedureCost(50)).toBe(exceptionalProcedureCost(EXCEPTIONAL_PROCEDURE_MAX_ESCALATIONS))
+  })
+
+  it('canUseExceptionalProcedure requires more capital after repeated use', () => {
+    expect(canUseExceptionalProcedure(EXCEPTIONAL_PROCEDURE_CAPITAL_COST, 0)).toBe(true)
+    expect(canUseExceptionalProcedure(EXCEPTIONAL_PROCEDURE_CAPITAL_COST, 1)).toBe(false)
+    expect(canUseExceptionalProcedure(exceptionalProcedureCost(1), 1)).toBe(true)
+  })
+
+  it('applyExceptionalProcedure costs more capital, more popularity, and more tension on a second use', () => {
+    const first = applyExceptionalProcedure(200, 0, 0)
+    const second = applyExceptionalProcedure(200, 0, 1)
+    expect(200 - second.politicalCapitalAfter).toBeGreaterThan(200 - first.politicalCapitalAfter)
+    expect(second.popularityDelta).toBeLessThan(first.popularityDelta)
+    expect(second.governmentTensionAfter).toBeGreaterThan(first.governmentTensionAfter)
   })
 })
 

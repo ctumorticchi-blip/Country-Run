@@ -1,8 +1,9 @@
 import { advanceEconomicTurn } from '../../../engine/economy/advanceEconomy.ts'
 import type { EconomicEngineConfig } from '../../../engine/economy/config/types.ts'
-import type { EconomicDiagnostics, EconomicPolicyInput, WorldState } from '../../../engine/economy/types.ts'
+import type { EconomicDiagnostics, EconomicPolicyInput, ExternalShock, WorldState } from '../../../engine/economy/types.ts'
 import type { GameState, Turn } from '../../../engine/state/gameState.ts'
 import { isMandateEndTurn, isMidtermTurn, isYearEndTurn, isYearStartTurn } from './calendar.ts'
+import type { EventMemory } from '../../../engine/events/memory.ts'
 import { EVENT_CATALOG } from '../events/eventCatalog.ts'
 import type { EventChoice, EventDefinition, EventEligibilityContext } from '../events/eventTypes.ts'
 import { selectEventForTurn } from '../events/eventSelection.ts'
@@ -75,6 +76,10 @@ export interface BeginMandateTurnInput {
   previousMergedPolicy: EconomicPolicyInput
   scheduledImplementations: readonly ScheduledImplementation[]
   firedEventIds: readonly string[]
+  /** M6.5 §2 — see `EventEligibilityContext.eventMemories`'s own doc comment. */
+  eventMemories?: readonly EventMemory[]
+  /** M6.5 §40 — see `EventEligibilityContext.sovereignFundExists`'s own doc comment. */
+  sovereignFundExists?: boolean
   selectedPromiseIds: readonly string[]
   governmentProfileId: string | null
   policyHistory: readonly PolicyHistoryEntry[]
@@ -82,6 +87,16 @@ export interface BeginMandateTurnInput {
   politicalCapital: number
   /** Defaults to the full `EVENT_CATALOG` — overridable for isolated testing. */
   events?: readonly EventDefinition[]
+  /**
+   * M6.5 §47: one-off `ExternalShock`s queued by a NON-event political/
+   * economic consequence (a rejected budget's confidence hit, a
+   * sovereign-fund event, a national-project completion nudge) — applied
+   * on THIS turn only, alongside any `firedEvent.worldShock`, then the
+   * caller must clear them (they are never re-applied). Reuses the exact
+   * same, already-tested `ExternalShock`/`shocks[]` engine mechanism
+   * events use — no new engine plumbing.
+   */
+  pendingShocks?: readonly ExternalShock[]
 }
 
 export interface BeginMandateTurnResult {
@@ -124,9 +139,11 @@ export function beginMandateTurn(input: BeginMandateTurnInput): BeginMandateTurn
     governmentTension: input.governmentTension,
     politicalCapital: input.politicalCapital,
     firedEventIds: input.firedEventIds,
+    eventMemories: input.eventMemories,
+    sovereignFundExists: input.sovereignFundExists,
   }
   const firedEvent = selectEventForTurn(input.events ?? EVENT_CATALOG, eligibilityCtx, input.seed)
-  const shocks = firedEvent?.worldShock ? [firedEvent.worldShock] : []
+  const shocks = [...(input.pendingShocks ?? []), ...(firedEvent?.worldShock ? [firedEvent.worldShock] : [])]
 
   const rng = createActionRng(input.seed, `mandate-turn-${String(nextTurn)}`)
   const { nextState, diagnostics } = advanceEconomicTurn(input.state, newMergedPolicy, input.worldState, rng, input.config, shocks, previousMergedPolicy)

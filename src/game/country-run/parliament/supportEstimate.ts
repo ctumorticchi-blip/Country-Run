@@ -47,7 +47,14 @@ interface SupportProbabilityInputs {
   courted: boolean
   capitalSpentThisNegotiation: number
   promiseLinked: boolean
+  /** The presidential coalition's own seat count out of `ABSOLUTE_MAJORITY` (M6.5 §11-12) — see `governmentStrengthBonus` below. */
+  presidentialSeats: number
+  /** Deals this bloc was promised and that did NOT come through (M6.5 §14-15) — see `repeatedBetrayalPenalty` below. */
+  brokenDealCount: number
 }
+
+/** M4 §21's constant, duplicated here (not imported) to avoid a `parliament.ts` <-> `supportEstimate.ts` import cycle risk — both already independently define/consume Parliament-wide constants. */
+const ABSOLUTE_MAJORITY_SEATS = 289
 
 /**
  * The single point-estimate probability [0, 1] that a given bloc's seats
@@ -55,13 +62,14 @@ interface SupportProbabilityInputs {
  * bloc/bill affinity, promise alignment, government negotiation modifier,
  * political capital spent, popularity (capped, per §26 — never enough
  * alone to manufacture a majority), previous relationship, courting, and
- * bill controversy/red lines.
+ * bill controversy/red lines — plus two M6.5 §11-15 structural additions,
+ * `governmentStrengthBonus` and `repeatedBetrayalPenalty` (see below).
  */
 export function computeBlocSupportProbability(inputs: SupportProbabilityInputs): number {
-  const { bill, blocDef, relationScore, popularity, governmentModifiers, courted, capitalSpentThisNegotiation, promiseLinked } = inputs
+  const { bill, blocDef, relationScore, popularity, governmentModifiers, courted, capitalSpentThisNegotiation, promiseLinked, presidentialSeats, brokenDealCount } = inputs
   const affinity = dimensionAffinityScore(bill.policyTags, blocDef.policyAffinity)
 
-  const base = 0.5 + affinity * 0.35 + blocDef.baseGovernmentSupport * 0.15
+  const base = 0.5 + affinity * 0.42 + blocDef.baseGovernmentSupport * 0.22
   const relationBonus = (relationScore / 100) * 0.15
   const popularityBonus = ((popularity - 50) / 50) * 0.05
   const negotiationModifierBonus = (governmentModifiers.parliamentNegotiation - 1) * 0.5
@@ -69,16 +77,40 @@ export function computeBlocSupportProbability(inputs: SupportProbabilityInputs):
   const fiscalCredibilityBonus = blocDef.politicalTags.includes('fiscalDiscipline') ? (governmentModifiers.fiscalForecastAccuracy - 1) * 0.3 : 0
   // Les Réformateurs (M4 §25): higher reformEffectiveness reads as more social resistance on already-controversial bills.
   const controversyGovBoost = bill.definition.controversy * (governmentModifiers.reformEffectiveness - 1) * 0.5
-  const controversyPenalty = (bill.definition.controversy + controversyGovBoost) * 0.2 * (1 - Math.max(0, affinity))
+  const controversyPenalty = (bill.definition.controversy + controversyGovBoost) * 0.28 * (1 - Math.max(0, affinity))
   const courtedBonus = courted ? 0.08 : 0
   const capitalBonus = Math.min(0.2, capitalSpentThisNegotiation / 100)
   const promiseBonus = promiseLinked ? 0.03 : 0
+  /**
+   * M6.5 §11-12: THE structural fix for "budgets pass almost automatically
+   * under a weak majority" — a small presidential coalition genuinely
+   * commands less automatic deference from opposition blocs, independent
+   * of any one bill's own content. In [-0.14, +0.06]: a strong majority
+   * (≥289 seats on its own) gets a small default-cooperation bonus; a
+   * fragmented Assembly (well under 240) starts every negotiation at a
+   * real structural deficit that only courting/concessions/capital
+   * (unaffected by this term) can close — never a hard wall, always
+   * recoverable through the existing negotiation levers.
+   */
+  const governmentStrengthBonus = Math.min(0.06, Math.max(-0.14, ((presidentialSeats - ABSOLUTE_MAJORITY_SEATS) / ABSOLUTE_MAJORITY_SEATS) * 0.32))
+  /** M6.5 §14-15: a bloc betrayed on past deals (promised a concession/courting, still voted against, or the bill it was promised on failed) discounts the government's credibility further each time, up to a cap — "harder to negotiate with", never impossible. */
+  const repeatedBetrayalPenalty = Math.min(0.15, brokenDealCount * 0.04)
 
   let probability =
-    base + relationBonus + popularityBonus + negotiationModifierBonus + fiscalCredibilityBonus - controversyPenalty + courtedBonus + capitalBonus + promiseBonus
+    base +
+    relationBonus +
+    popularityBonus +
+    negotiationModifierBonus +
+    fiscalCredibilityBonus -
+    controversyPenalty +
+    courtedBonus +
+    capitalBonus +
+    promiseBonus +
+    governmentStrengthBonus -
+    repeatedBetrayalPenalty
 
   if (hitsRedLine(bill.policyTags, blocDef)) {
-    probability = Math.min(probability, 0.15)
+    probability = Math.min(probability, courted || capitalSpentThisNegotiation > 0 ? 0.35 : 0.15)
   }
 
   return Math.min(0.97, Math.max(0.03, probability))
@@ -171,6 +203,8 @@ export function estimateBillSupport(
   popularity: number,
   governmentModifiers: GovernmentModifiers,
   negotiation: ActiveNegotiationSnapshot | null,
+  /** M6.5 §14-15 — defaults to none for callers that don't yet track deal history. */
+  politicalDeals: readonly { blocId: string; fulfilled: boolean }[] = [],
 ): BillSupportEstimate {
   const presidentialBloc = composition.blocs.find((b) => b.isPlayerCoalition)
   const presidentialSeats = presidentialBloc?.seats ?? 0
@@ -189,6 +223,8 @@ export function estimateBillSupport(
         courted: negotiation?.courtedBlocIds.includes(b.id) ?? false,
         capitalSpentThisNegotiation: negotiation?.capitalSpent ?? 0,
         promiseLinked,
+        presidentialSeats,
+        brokenDealCount: politicalDeals.filter((d) => d.blocId === b.id && !d.fulfilled).length,
       })
       return {
         blocId: b.id,
